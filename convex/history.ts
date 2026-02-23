@@ -57,6 +57,21 @@ type JobsPayload = {
   }>;
 };
 
+type TeamsAlertPayload = {
+  repository: string;
+  workflow: string;
+  runNumber: number;
+  runId: number;
+  runUrl: string;
+  status: Exclude<RunConclusion, "success" | "neutral" | "skipped" | "stale"> | "failure";
+  actor: string;
+  branch: string;
+  event: string;
+  summary: string;
+  points: string[];
+  occurredAt: string;
+};
+
 function parseDurationMs(startedAt: string, updatedAt: string) {
   const start = new Date(startedAt).getTime();
   const end = new Date(updatedAt).getTime();
@@ -208,6 +223,38 @@ function summarizeFailure(job: JobsPayload["jobs"][number], highlights: string[]
   return { summary: fallback, points: [fallback] };
 }
 
+function parseCsvList(value: string | undefined) {
+  if (!value) {
+    return [];
+  }
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+function shouldAlertWorkflow(workflowName: string, allowList: string[]) {
+  if (allowList.length === 0) {
+    return workflowName === "dbt Deploy to Production";
+  }
+  return allowList.some((name) => name.toLowerCase() === workflowName.toLowerCase());
+}
+
+async function sendTeamsAlert(webhookUrl: string, payload: TeamsAlertPayload) {
+  const res = await fetch(webhookUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Teams webhook ${res.status}: ${body.slice(0, 200)}`);
+  }
+}
+
 async function ghFetchJson<T>(path: string, token: string): Promise<T> {
   const res = await fetch(`https://api.github.com${path}`, {
     headers: {
@@ -292,6 +339,8 @@ export const syncGithub = action({
     }
 
     const key = `${owner}/${repo}`;
+    const teamsWebhookUrl = process.env.TEAMS_WEBHOOK_URL;
+    const teamsWorkflowAllowList = parseCsvList(process.env.TEAMS_ALERT_WORKFLOWS);
     const minIntervalMs = args.minIntervalMs ?? 55_000;
     const state = await ctx.runQuery(internal.internalHistory.getSyncState, { key });
     if (state && Date.now() - state.lastSyncMs < minIntervalMs) {
@@ -382,6 +431,52 @@ export const syncGithub = action({
         }
 
         await ctx.runMutation(internal.internalHistory.upsertRun, base);
+
+        if (
+          teamsWebhookUrl &&
+          run.status === "completed" &&
+          failureConclusions.has(run.conclusion ?? "") &&
+          shouldAlertWorkflow(base.workflowName, teamsWorkflowAllowList)
+        ) {
+          const existingAlert = await ctx.runQuery(internal.internalHistory.getAlertByRunChannel, {
+            runId: run.id,
+            channel: "teams",
+          });
+
+          if (!existingAlert) {
+            const fallbackSummary =
+              base.failureSummary ?? `${base.workflowName}: run concluded with ${base.conclusion ?? "failure"}.`;
+            const payload: TeamsAlertPayload = {
+              repository: `${owner}/${repo}`,
+              workflow: base.workflowName,
+              runNumber: base.runNumber,
+              runId: base.runId,
+              runUrl: base.url,
+              status: (base.conclusion ?? "failure") as TeamsAlertPayload["status"],
+              actor: base.actor,
+              branch: base.branch,
+              event: base.event,
+              summary: fallbackSummary,
+              points: (base.failurePoints ?? []).slice(0, 3),
+              occurredAt: base.updatedAt,
+            };
+
+            try {
+              await sendTeamsAlert(teamsWebhookUrl, payload);
+              await ctx.runMutation(internal.internalHistory.insertAlert, {
+                runId: run.id,
+                workflowName: base.workflowName,
+                channel: "teams",
+                sentAt: new Date().toISOString(),
+              });
+            } catch (alertError) {
+              console.error("Failed to send Teams alert", {
+                runId: run.id,
+                error: alertError instanceof Error ? alertError.message : String(alertError),
+              });
+            }
+          }
+        }
       }
 
       await ctx.runMutation(internal.internalHistory.setSyncState, {

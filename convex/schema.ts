@@ -48,4 +48,11 @@ export default defineSchema({
     lastSyncMs: v.number(),
     lastError: v.optional(v.string()),
   }).index("by_key", ["key"]),
+
+  alertsSent: defineTable({
+    runId: v.number(),
+    workflowName: v.string(),
+    channel: v.literal("teams"),
+    sentAt: v.string(),
+  }).index("by_run_id", ["runId"]),
 });

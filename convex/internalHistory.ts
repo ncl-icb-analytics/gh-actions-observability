@@ -87,3 +87,29 @@ export const upsertRun = internalMutation({
     await ctx.db.insert("runs", args);
   },
 });
+
+export const getAlertByRunChannel = internalQuery({
+  args: {
+    runId: v.number(),
+    channel: v.literal("teams"),
+  },
+  handler: async (ctx, args) => {
+    return ctx.db
+      .query("alertsSent")
+      .withIndex("by_run_id", (q) => q.eq("runId", args.runId))
+      .filter((q) => q.eq(q.field("channel"), args.channel))
+      .unique();
+  },
+});
+
+export const insertAlert = internalMutation({
+  args: {
+    runId: v.number(),
+    workflowName: v.string(),
+    channel: v.literal("teams"),
+    sentAt: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.insert("alertsSent", args);
+  },
+});
