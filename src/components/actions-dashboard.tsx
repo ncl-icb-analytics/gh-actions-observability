@@ -283,10 +283,11 @@ export function ActionsDashboard() {
   }, [filteredRuns]);
 
   const trendData = useMemo(() => {
-    return [...filteredRuns]
-      .sort((a, b) => new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime())
-      .slice(0, 20)
-      .map((run) => ({
+    const sorted = [...filteredRuns].sort(
+      (a, b) => new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime(),
+    );
+
+    return sorted.slice(-40).map((run) => ({
         ts: new Date(run.updatedAt).getTime(),
         runNumber: run.runNumber,
         workflowName: run.workflowName,
