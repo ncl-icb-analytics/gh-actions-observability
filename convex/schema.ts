@@ -52,7 +52,9 @@ export default defineSchema({
   alertsSent: defineTable({
     runId: v.number(),
     workflowName: v.string(),
-    channel: v.literal("teams"),
+    channel: v.union(v.literal("teams"), v.literal("teams_pull")),
     sentAt: v.string(),
-  }).index("by_run_id", ["runId"]),
+  })
+    .index("by_run_id", ["runId"])
+    .index("by_channel_run_id", ["channel", "runId"]),
 });

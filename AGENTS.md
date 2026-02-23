@@ -52,6 +52,9 @@ Defined in `convex/schema.ts`:
 - Dashboard calls `GET /api/history`
 - Route loads from Convex query `history:getHistory`
 - No direct GitHub API calls from this route
+- Teams pull API routes:
+  - `GET|POST /api/teams/notifications` -> `alerts:getPendingTeamsFailures`
+  - `POST /api/teams/ack` -> `alerts:acknowledgeTeamsFailures`
 
 ## Environment contracts
 
@@ -71,6 +74,7 @@ Required for API route:
 
 - `CONVEX_URL` (preferred in hosted env)
 - `NEXT_PUBLIC_CONVEX_URL` (used in local workflows)
+- `TEAMS_PULL_TOKEN` (optional shared secret for Teams pull endpoints)
 
 ## Local workflow (Bun-first)
 

@@ -131,6 +131,40 @@ Payload shape sent by Convex:
 
 Alert deduplication is by run ID + channel, so each failed run sends one Teams alert.
 
+## Teams pull API (recommended for locked-down inbound webhooks)
+
+If your org blocks inbound webhook triggers, Teams Workflow can poll and consume notifications from this app.
+
+### Endpoints
+
+- `GET|POST /api/teams/notifications`
+  - returns pending unsent failure notifications
+  - query params:
+    - `limit` (default `10`, max `50`)
+    - `lookbackHours` (default `168`)
+    - `workflows` (optional CSV workflow names)
+- `POST /api/teams/ack`
+  - body: `{ "runIds": [123456, 123457] }`
+  - marks these notifications consumed so they are not sent again
+
+Set optional API auth token in Vercel:
+
+- `TEAMS_PULL_TOKEN`
+  - if set, callers must include header `x-teams-token: <value>`
+
+### Power Automate flow
+
+1. Trigger: `Recurrence` every 5 minutes.
+2. HTTP (GET): `https://gh-actions-observability.vercel.app/api/teams/notifications?limit=10`
+   - add header `x-teams-token` if `TEAMS_PULL_TOKEN` is configured.
+3. Parse JSON response and loop `notifications`.
+4. Post each item to Teams channel using `messageTitle` / `messageBody`.
+5. HTTP (POST) to `https://gh-actions-observability.vercel.app/api/teams/ack`
+   - body:
+   ```json
+   { "runIds": [123456789] }
+   ```
+
 ## Notes on metrics
 
 - `Total Minutes (Est.)` is computed from workflow run durations in cached run data.
