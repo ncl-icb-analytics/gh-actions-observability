@@ -781,6 +781,24 @@ export function ActionsDashboard() {
                         <Cell key={entry.name} fill={entry.color} />
                       ))}
                     </Pie>
+                    <text
+                      x="50%"
+                      y="48%"
+                      textAnchor="middle"
+                      dominantBaseline="central"
+                      className="fill-slate-900 text-2xl font-semibold"
+                    >
+                      {summary.successRate}%
+                    </text>
+                    <text
+                      x="50%"
+                      y="60%"
+                      textAnchor="middle"
+                      dominantBaseline="central"
+                      className="fill-slate-500 text-xs"
+                    >
+                      success
+                    </text>
                   </PieChart>
                 </ResponsiveContainer>
               </ChartCard>
@@ -817,7 +835,7 @@ export function ActionsDashboard() {
                       dataKey="success"
                       stackId="a"
                       fill="#10b981"
-                      radius={[0, 4, 4, 0]}
+                      radius={[4, 0, 0, 4]}
                       animationDuration={chartAnimationMs}
                     />
                     <Bar
@@ -848,7 +866,7 @@ export function ActionsDashboard() {
                       dataKey="success"
                       stackId="a"
                       fill="#10b981"
-                      radius={[4, 4, 0, 0]}
+                      radius={[0, 0, 4, 4]}
                       animationDuration={chartAnimationMs}
                     />
                     <Bar
