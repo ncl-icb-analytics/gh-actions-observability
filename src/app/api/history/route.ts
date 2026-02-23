@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
     }
 
     const since = request.nextUrl.searchParams.get("since");
-    const maxRuns = parseLimit(request.nextUrl.searchParams.get("maxRuns"), 1500, 100, 2000);
+    const maxRuns = parseLimit(request.nextUrl.searchParams.get("maxRuns"), 900, 20, 2000);
 
     const convex = new ConvexHttpClient(convexUrl) as unknown as UntypedConvexHttpClient;
 

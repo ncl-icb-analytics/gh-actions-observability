@@ -115,6 +115,21 @@ function getPeriodSinceIso(period: PeriodFilter) {
   return start?.toISOString() ?? null;
 }
 
+function getMaxRunsForPeriod(period: PeriodFilter) {
+  switch (period) {
+    case "24h":
+      return 200;
+    case "7d":
+      return 500;
+    case "30d":
+      return 900;
+    case "90d":
+      return 1400;
+    case "all":
+      return 1500;
+  }
+}
+
 function statusTone(run: ActionsRun) {
   if (run.status !== "completed") {
     return "bg-amber-100 text-amber-800 ring-amber-200";
@@ -168,8 +183,7 @@ export function ActionsDashboard() {
     const load = async () => {
       try {
         const params = new URLSearchParams({
-          maxRuns: "1500",
-          detailsLimit: "160",
+          maxRuns: String(getMaxRunsForPeriod(periodFilter)),
         });
         const since = getPeriodSinceIso(periodFilter);
         if (since) {

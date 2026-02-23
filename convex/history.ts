@@ -417,22 +417,24 @@ export const getHistory = query({
   handler: async (ctx, args) => {
     const owner = process.env.GITHUB_OWNER ?? "unknown";
     const repo = process.env.GITHUB_REPO ?? "unknown";
-    const maxRuns = Math.min(2000, Math.max(100, args.maxRuns ?? 1500));
-    const sinceMs = args.since ? new Date(args.since).getTime() : null;
+    const maxRuns = Math.min(2000, Math.max(20, args.maxRuns ?? 900));
+    const parsedSinceMs = args.since ? new Date(args.since).getTime() : Number.NaN;
+    const sinceMs = Number.isFinite(parsedSinceMs) ? parsedSinceMs : null;
 
-    const rows = await ctx.db
-      .query("runs")
-      .withIndex("by_updated_at_ms")
-      .order("desc")
-      .take(maxRuns);
-
-    const filtered = sinceMs === null ? rows : rows.filter((row) => row.updatedAtMs >= sinceMs);
+    const rows =
+      sinceMs === null
+        ? await ctx.db.query("runs").withIndex("by_updated_at_ms").order("desc").take(maxRuns)
+        : await ctx.db
+            .query("runs")
+            .withIndex("by_updated_at_ms", (q) => q.gte("updatedAtMs", sinceMs))
+            .order("desc")
+            .take(maxRuns);
 
     return {
       owner,
       repo,
       generatedAt: new Date().toISOString(),
-      runs: filtered.map((row: Doc<"runs">) => ({
+      runs: rows.map((row: Doc<"runs">) => ({
         id: row.runId,
         name: row.name,
         workflowName: row.workflowName,
