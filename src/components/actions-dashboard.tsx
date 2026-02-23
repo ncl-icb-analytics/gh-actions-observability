@@ -182,6 +182,7 @@ export function ActionsDashboard({
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [showAllFailures, setShowAllFailures] = useState(false);
   const [showConnectionWarning, setShowConnectionWarning] = useState(false);
+  const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
   const since = useMemo(() => getPeriodSinceIso(periodFilter), [periodFilter]);
   const connectionState = useConvexConnectionState();
   const liveData = useQuery(api.history.getHistory, {
@@ -192,13 +193,17 @@ export function ActionsDashboard({
   const loading = data === null || data === undefined;
 
   useEffect(() => {
-    if (connectionState.isWebSocketConnected || connectionState.hasInflightRequests) {
-      const clearTimeoutId = window.setTimeout(() => setShowConnectionWarning(false), 0);
-      return () => window.clearTimeout(clearTimeoutId);
+    const isConnected = connectionState.isWebSocketConnected || connectionState.hasInflightRequests;
+    if (isConnected) {
+      setHasConnectedOnce(true);
+      setShowConnectionWarning(false);
+      return;
     }
-    const timeout = window.setTimeout(() => setShowConnectionWarning(true), 2500);
+    // Only warn about lost connections, not initial connect delay
+    if (!hasConnectedOnce) return;
+    const timeout = window.setTimeout(() => setShowConnectionWarning(true), 8000);
     return () => window.clearTimeout(timeout);
-  }, [connectionState.hasInflightRequests, connectionState.isWebSocketConnected]);
+  }, [connectionState.hasInflightRequests, connectionState.isWebSocketConnected, hasConnectedOnce]);
 
   const runs = data?.runs ?? EMPTY_RUNS;
   const generatedAt = data?.generatedAt;
@@ -839,7 +844,7 @@ export function ActionsDashboard({
                       name="Success"
                       stackId="a"
                       fill="#10b981"
-                      radius={[0, 0, 0, 0]}
+                      shape={(props: any) => RoundedHStackBar(props, "left", "failed")}
                       animationDuration={chartAnimationMs}
                     />
                     <Bar
@@ -847,7 +852,7 @@ export function ActionsDashboard({
                       name="Failed"
                       stackId="a"
                       fill="#f43f5e"
-                      radius={[0, 4, 4, 0]}
+                      shape={(props: any) => RoundedHStackBar(props, "right", "failed")}
                       animationDuration={chartAnimationMs}
                     />
                   </BarChart>
@@ -895,7 +900,7 @@ export function ActionsDashboard({
                       name="Success"
                       stackId="a"
                       fill="#10b981"
-                      radius={[0, 0, 0, 0]}
+                      shape={(props: any) => RoundedStackBar(props, "bottom", "failed")}
                       animationDuration={chartAnimationMs}
                     />
                     <Bar
@@ -903,7 +908,7 @@ export function ActionsDashboard({
                       name="Failed"
                       stackId="a"
                       fill="#f43f5e"
-                      radius={[4, 4, 0, 0]}
+                      shape={(props: any) => RoundedStackBar(props, "top", "failed")}
                       animationDuration={chartAnimationMs}
                     />
                   </BarChart>
@@ -1014,6 +1019,58 @@ function ChartCard({
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+function RoundedStackBar(props: any, position: "bottom" | "top", failedKey: string) {
+  const { x, y, width, height, fill, payload } = props;
+  if (!width || !height || height <= 0) return null;
+  const hasFailed = (payload?.[failedKey] ?? 0) > 0;
+  const r = 4;
+  if (position === "bottom" && hasFailed) {
+    return <rect x={x} y={y} width={width} height={height} fill={fill} />;
+  }
+  if (position === "bottom") {
+    // success-only: round the top-right corners (horizontal) or top corners (vertical)
+    return (
+      <path
+        d={`M${x},${y + height} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + width - r},${y} Q${x + width},${y} ${x + width},${y + r} L${x + width},${y + height} Z`}
+        fill={fill}
+      />
+    );
+  }
+  // top bar (failed): always rounded on top
+  return (
+    <path
+      d={`M${x},${y + height} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + width - r},${y} Q${x + width},${y} ${x + width},${y + r} L${x + width},${y + height} Z`}
+      fill={fill}
+    />
+  );
+}
+
+function RoundedHStackBar(props: any, position: "left" | "right", failedKey: string) {
+  const { x, y, width, height, fill, payload } = props;
+  if (!width || !height || height <= 0) return null;
+  const hasFailed = (payload?.[failedKey] ?? 0) > 0;
+  const r = 4;
+  if (position === "left" && hasFailed) {
+    return <rect x={x} y={y} width={width} height={height} fill={fill} />;
+  }
+  if (position === "left") {
+    // success-only: round the right end
+    return (
+      <path
+        d={`M${x},${y} L${x + width - r},${y} Q${x + width},${y} ${x + width},${y + r} L${x + width},${y + height - r} Q${x + width},${y + height} ${x + width - r},${y + height} L${x},${y + height} Z`}
+        fill={fill}
+      />
+    );
+  }
+  // right bar (failed): always rounded on right
+  return (
+    <path
+      d={`M${x},${y} L${x + width - r},${y} Q${x + width},${y} ${x + width},${y + r} L${x + width},${y + height - r} Q${x + width},${y + height} ${x + width - r},${y + height} L${x},${y + height} Z`}
+      fill={fill}
+    />
+  );
+}
+
 function ChartTooltipContent({
   active,
   payload,
