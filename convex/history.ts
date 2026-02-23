@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, internalAction, query } from "./_generated/server";
+import { action, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 
@@ -57,13 +57,6 @@ type JobsPayload = {
       number: number;
     }>;
   }>;
-};
-
-const syncArgs = {
-  since: v.optional(v.string()),
-  maxRuns: v.optional(v.number()),
-  detailsLimit: v.optional(v.number()),
-  minIntervalMs: v.optional(v.number()),
 };
 
 function parseDurationMs(startedAt: string, updatedAt: string) {
@@ -298,8 +291,13 @@ async function fetchWorkflowRun(owner: string, repo: string, token: string, runI
   }
 }
 
-export const syncGithubInternal = internalAction({
-  args: syncArgs,
+export const syncGithub: ReturnType<typeof action> = action({
+  args: {
+    since: v.optional(v.string()),
+    maxRuns: v.optional(v.number()),
+    detailsLimit: v.optional(v.number()),
+    minIntervalMs: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
     const owner = process.env.GITHUB_OWNER;
     const repo = process.env.GITHUB_REPO;
@@ -472,13 +470,6 @@ export const syncGithubInternal = internalAction({
       });
       throw error;
     }
-  },
-});
-
-export const syncGithub = action({
-  args: syncArgs,
-  handler: async (ctx, args) => {
-    return ctx.runAction(internal.history.syncGithubInternal, args);
   },
 });
 

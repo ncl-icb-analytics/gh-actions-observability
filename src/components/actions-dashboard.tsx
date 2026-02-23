@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery } from "convex/react";
+import { useConvexConnectionState, useQuery } from "convex/react";
 import {
   Bar,
   BarChart,
@@ -163,7 +163,11 @@ function extractFailureHeadline(summary: string | null) {
   return summary.slice(firstColon + 2);
 }
 
-export function ActionsDashboard() {
+export function ActionsDashboard({
+  initialData = null,
+}: {
+  initialData?: ActionsHistoryResponse | null;
+}) {
   const [workflowFilter, setWorkflowFilter] = useState("all");
   const [branchFilter, setBranchFilter] = useState("all");
   const [prFilter, setPrFilter] = useState("all");
@@ -172,11 +176,13 @@ export function ActionsDashboard() {
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [showAllFailures, setShowAllFailures] = useState(false);
   const since = getPeriodSinceIso(periodFilter);
-  const data = useQuery("history:getHistory" as never, {
+  const connectionState = useConvexConnectionState();
+  const liveData = useQuery("history:getHistory" as never, {
     since: since ?? undefined,
     maxRuns: getMaxRunsForPeriod(periodFilter),
   } as never) as ActionsHistoryResponse | undefined;
-  const loading = data === undefined;
+  const data = liveData ?? initialData;
+  const loading = data === null || data === undefined;
 
   const runs = data?.runs ?? EMPTY_RUNS;
   const generatedAt = data?.generatedAt;
@@ -409,11 +415,18 @@ export function ActionsDashboard() {
           <div className="mt-1 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
             <h1 className="text-2xl font-semibold tracking-tight">{data ? `${data.owner}/${data.repo}` : "Repository"}</h1>
             <p className="text-sm text-slate-600">
-              Last refresh: {data ? formatTime(data.generatedAt) : "-"} • Live updates via Convex
+              Last refresh: {data ? formatTime(data.generatedAt) : "-"} •{" "}
+              {liveData ? "Live updates via Convex" : "Snapshot mode (realtime unavailable)"}
             </p>
           </div>
           <p className="mt-1 text-sm text-slate-600">Reporting period: {reportingPeriodLabel}</p>
         </header>
+
+        {!connectionState.isWebSocketConnected && !connectionState.hasInflightRequests && (
+          <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            Realtime connection to Convex is not established yet.
+          </section>
+        )}
 
         <section className="rounded-2xl border border-white/70 bg-white/90 p-4 shadow-lg shadow-slate-900/5">
           <div className="mb-3 flex items-center justify-between gap-2">
@@ -546,19 +559,25 @@ export function ActionsDashboard() {
           )}
         </section>
 
-        {!hasRunsInPeriod && (
+        {loading && (
+          <section className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
+            Loading live run data...
+          </section>
+        )}
+
+        {!loading && !hasRunsInPeriod && (
           <section className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
             No actions ran in the selected reporting period.
           </section>
         )}
 
-        {hasRunsInPeriod && !hasVisibleRuns && (
+        {!loading && hasRunsInPeriod && !hasVisibleRuns && (
           <section className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
             No runs match the current branch/workflow/PR/search filters in this period.
           </section>
         )}
 
-        {hasVisibleRuns && (
+        {!loading && hasVisibleRuns && (
           <>
             <section className="grid gap-4 md:grid-cols-3">
               <MetricCard label="Failures" value={summary.failed} />
