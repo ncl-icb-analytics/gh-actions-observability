@@ -33,7 +33,7 @@ Defined in `convex/schema.ts`:
 ## Sync behavior
 
 - Cron schedule: `convex/crons.ts`
-  - interval: every 5 minutes
+  - interval: every 1 minute
   - job: `api.history.syncGithub`
 - Sync implementation: `convex/history.ts`
   - incremental fetch via `since`/cursor window
@@ -46,6 +46,7 @@ Defined in `convex/schema.ts`:
 - Dashboard calls `GET /api/history`
 - Route loads from Convex query `history:getHistory`
 - No direct GitHub API calls from this route
+- Dashboard UI uses live Convex subscriptions for immediate updates in the browser.
 
 ## Environment contracts
 
@@ -86,7 +87,7 @@ This repository does not expose custom Teams notification ingestion/ack APIs.
 ## Guardrails
 
 - Do not commit credentials from `.env.local`.
-- Avoid increasing sync frequency below 5 minutes without rate-limit analysis.
+- Keep sync settings rate-limit aware; if frequency or maxRuns increase, re-check GitHub API budget.
 - Keep failure parsing deterministic and concise; avoid full-log storage.
 - Preserve filter + failure-first UX in dashboard edits.
 

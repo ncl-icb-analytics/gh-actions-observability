@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery } from "convex/react";
 import {
   Bar,
   BarChart,
@@ -17,16 +18,9 @@ import {
 } from "recharts";
 import type { ActionsHistoryResponse, ActionsRun } from "@/lib/types";
 
-const refreshMs = 5 * 60_000;
 const EMPTY_RUNS: ActionsRun[] = [];
 const chartAnimationMs = 180;
 type PeriodFilter = "24h" | "7d" | "30d" | "90d" | "all";
-type ApiErrorResponse = {
-  error: string;
-  rateLimited?: boolean;
-  retryAfterSec?: number | null;
-  resetAt?: string | null;
-};
 
 const PERIOD_OPTIONS: Array<{ value: PeriodFilter; label: string }> = [
   { value: "24h", label: "Last 24 hours" },
@@ -163,9 +157,6 @@ function extractFailureHeadline(summary: string | null) {
 }
 
 export function ActionsDashboard() {
-  const [data, setData] = useState<ActionsHistoryResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [workflowFilter, setWorkflowFilter] = useState("all");
   const [branchFilter, setBranchFilter] = useState("all");
   const [prFilter, setPrFilter] = useState("all");
@@ -173,92 +164,18 @@ export function ActionsDashboard() {
   const [query, setQuery] = useState("");
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [showAllFailures, setShowAllFailures] = useState(false);
-  const [errorHint, setErrorHint] = useState<string | null>(null);
-  const emptyFollowupTriggeredRef = useRef(false);
-  const immediateRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    let mounted = true;
-
-    const load = async () => {
-      try {
-        const params = new URLSearchParams({
-          maxRuns: String(getMaxRunsForPeriod(periodFilter)),
-        });
-        const since = getPeriodSinceIso(periodFilter);
-        if (since) {
-          params.set("since", since);
-        }
-
-        const response = await fetch(`/api/history?${params.toString()}`, { cache: "no-store" });
-        const json = (await response.json()) as ActionsHistoryResponse | ApiErrorResponse;
-
-        if (!response.ok || "error" in json) {
-          if ("error" in json && json.rateLimited) {
-            const retryNote = json.retryAfterSec
-              ? ` Retry after about ${json.retryAfterSec}s.`
-              : "";
-            const resetNote = json.resetAt
-              ? ` Limit resets at ${formatTime(json.resetAt)}.`
-              : "";
-            const rateLimitMessage = `${json.error}.${retryNote}${resetNote}`;
-            throw new Error(rateLimitMessage);
-          }
-          throw new Error("error" in json ? json.error : "Unable to load history");
-        }
-
-        if (mounted) {
-          setData(json);
-          setError(null);
-          setErrorHint(null);
-
-          if (json.runs.length === 0 && !emptyFollowupTriggeredRef.current) {
-            emptyFollowupTriggeredRef.current = true;
-            immediateRetryTimerRef.current = setTimeout(() => {
-              void load();
-            }, 0);
-          } else if (json.runs.length > 0) {
-            emptyFollowupTriggeredRef.current = false;
-          }
-        }
-      } catch (err) {
-        if (mounted) {
-          const message = err instanceof Error ? err.message : "Unknown error";
-          setError(message);
-          if (/GITHUB_TOKEN|GITHUB_OWNER|GITHUB_REPO|GITHUB_REPOSITORY|Missing GITHUB_/i.test(message)) {
-            setErrorHint(
-              "Set GITHUB_TOKEN and repository env vars before loading this dashboard.",
-            );
-          } else if (/rate limit/i.test(message)) {
-            setErrorHint(
-              "Polling will continue every 60s. Consider lowering load or waiting for the rate limit reset.",
-            );
-          } else {
-            setErrorHint(null);
-          }
-        }
-      } finally {
-        if (mounted) {
-          setLoading(false);
-        }
-      }
-    };
-
-    load();
-    const timer = setInterval(load, refreshMs);
-    return () => {
-      mounted = false;
-      clearInterval(timer);
-      if (immediateRetryTimerRef.current) {
-        clearTimeout(immediateRetryTimerRef.current);
-      }
-    };
-  }, [periodFilter]);
+  const since = getPeriodSinceIso(periodFilter);
+  const data = useQuery("history:getHistory" as never, {
+    since: since ?? undefined,
+    maxRuns: getMaxRunsForPeriod(periodFilter),
+  } as never) as ActionsHistoryResponse | undefined;
+  const loading = data === undefined;
 
   const runs = data?.runs ?? EMPTY_RUNS;
+  const generatedAt = data?.generatedAt;
   const periodEnd = useMemo(
-    () => (data?.generatedAt ? new Date(data.generatedAt) : new Date()),
-    [data?.generatedAt],
+    () => (generatedAt ? new Date(generatedAt) : new Date()),
+    [generatedAt],
   );
   const periodStart = useMemo(
     () => getPeriodStart(periodFilter, periodEnd),
@@ -288,34 +205,23 @@ export function ActionsDashboard() {
     [runsInPeriod],
   );
 
-  useEffect(() => {
-    if (workflowFilter !== "all" && !workflowOptions.includes(workflowFilter)) {
-      setWorkflowFilter("all");
-    }
-  }, [workflowFilter, workflowOptions]);
-
-  useEffect(() => {
-    if (branchFilter !== "all" && !branchOptions.includes(branchFilter)) {
-      setBranchFilter("all");
-    }
-  }, [branchFilter, branchOptions]);
-
-  useEffect(() => {
-    if (prFilter !== "all" && !prOptions.includes(Number(prFilter))) {
-      setPrFilter("all");
-    }
-  }, [prFilter, prOptions]);
+  const effectiveWorkflowFilter =
+    workflowFilter === "all" || workflowOptions.includes(workflowFilter) ? workflowFilter : "all";
+  const effectiveBranchFilter =
+    branchFilter === "all" || branchOptions.includes(branchFilter) ? branchFilter : "all";
+  const effectivePrFilter =
+    prFilter === "all" || prOptions.includes(Number(prFilter)) ? prFilter : "all";
 
   const filteredRuns = useMemo(() => {
-    const selectedPr = prFilter === "all" ? null : Number(prFilter);
+    const selectedPr = effectivePrFilter === "all" ? null : Number(effectivePrFilter);
     const normalizedQuery = query.trim().toLowerCase();
 
     return runsInPeriod.filter((run) => {
-      if (workflowFilter !== "all" && run.workflowName !== workflowFilter) {
+      if (effectiveWorkflowFilter !== "all" && run.workflowName !== effectiveWorkflowFilter) {
         return false;
       }
 
-      if (branchFilter !== "all" && run.branch !== branchFilter) {
+      if (effectiveBranchFilter !== "all" && run.branch !== effectiveBranchFilter) {
         return false;
       }
 
@@ -333,7 +239,7 @@ export function ActionsDashboard() {
 
       return searchBlob.includes(normalizedQuery);
     });
-  }, [runsInPeriod, workflowFilter, branchFilter, prFilter, query]);
+  }, [runsInPeriod, effectiveWorkflowFilter, effectiveBranchFilter, effectivePrFilter, query]);
 
   const summary = useMemo(() => {
     const completed = filteredRuns.filter((run) => run.status === "completed");
@@ -496,18 +402,11 @@ export function ActionsDashboard() {
           <div className="mt-1 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
             <h1 className="text-2xl font-semibold tracking-tight">{data ? `${data.owner}/${data.repo}` : "Repository"}</h1>
             <p className="text-sm text-slate-600">
-              Last refresh: {data ? formatTime(data.generatedAt) : "-"} • Refreshing every {Math.round(refreshMs / 60_000)}m
+              Last refresh: {data ? formatTime(data.generatedAt) : "-"} • Live updates via Convex
             </p>
           </div>
           <p className="mt-1 text-sm text-slate-600">Reporting period: {reportingPeriodLabel}</p>
         </header>
-
-        {error && (
-          <section className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-rose-800">
-            {error}
-            {errorHint && <div className="mt-1 text-sm">{errorHint}</div>}
-          </section>
-        )}
 
         <section className="rounded-2xl border border-white/70 bg-white/90 p-4 shadow-lg shadow-slate-900/5">
           <div className="mb-3 flex items-center justify-between gap-2">
@@ -591,7 +490,7 @@ export function ActionsDashboard() {
                 <label className="space-y-1 text-xs text-slate-600">
                   Workflow (Action)
                   <select
-                    value={workflowFilter}
+                    value={effectiveWorkflowFilter}
                     onChange={(event) => setWorkflowFilter(event.target.value)}
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                   >
@@ -607,7 +506,7 @@ export function ActionsDashboard() {
                 <label className="space-y-1 text-xs text-slate-600">
                   Branch
                   <select
-                    value={branchFilter}
+                    value={effectiveBranchFilter}
                     onChange={(event) => setBranchFilter(event.target.value)}
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                   >
@@ -623,7 +522,7 @@ export function ActionsDashboard() {
                 <label className="space-y-1 text-xs text-slate-600">
                   PR
                   <select
-                    value={prFilter}
+                    value={effectivePrFilter}
                     onChange={(event) => setPrFilter(event.target.value)}
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                   >

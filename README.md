@@ -13,12 +13,12 @@ The app uses a cache-first architecture to reduce GitHub API pressure and improv
 
 ### Data flow
 
-1. Convex cron (`convex/crons.ts`) runs every 5 minutes.
+1. Convex cron (`convex/crons.ts`) runs every 1 minute.
 2. Cron executes `history:syncGithub` (Convex action).
 3. Sync action fetches incremental run history from GitHub and upserts into Convex tables.
 4. Sync enriches failed runs with job/log-derived failure summaries.
 5. Next.js route `/api/history` reads from Convex cache (`history:getHistory`) and returns dashboard payload.
-6. Dashboard polls `/api/history` every 5 minutes.
+6. Dashboard subscribes to live Convex query updates (no client polling interval).
 
 User requests do not call GitHub APIs directly.
 
