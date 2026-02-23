@@ -1,8 +1,6 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
 
-const alertChannel = v.union(v.literal("teams"), v.literal("teams_pull"));
-
 export const getSyncState = internalQuery({
   args: { key: v.string() },
   handler: async (ctx, args) => {
@@ -87,30 +85,5 @@ export const upsertRun = internalMutation({
     }
 
     await ctx.db.insert("runs", args);
-  },
-});
-
-export const getAlertByRunChannel = internalQuery({
-  args: {
-    runId: v.number(),
-    channel: alertChannel,
-  },
-  handler: async (ctx, args) => {
-    return ctx.db
-      .query("alertsSent")
-      .withIndex("by_channel_run_id", (q) => q.eq("channel", args.channel).eq("runId", args.runId))
-      .unique();
-  },
-});
-
-export const insertAlert = internalMutation({
-  args: {
-    runId: v.number(),
-    workflowName: v.string(),
-    channel: alertChannel,
-    sentAt: v.string(),
-  },
-  handler: async (ctx, args) => {
-    await ctx.db.insert("alertsSent", args);
   },
 });

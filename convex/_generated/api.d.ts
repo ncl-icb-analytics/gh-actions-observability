@@ -8,7 +8,6 @@
  * @module
  */
 
-import type * as alerts from "../alerts.js";
 import type * as crons from "../crons.js";
 import type * as history from "../history.js";
 import type * as internalHistory from "../internalHistory.js";
@@ -20,7 +19,6 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  alerts: typeof alerts;
   crons: typeof crons;
   history: typeof history;
   internalHistory: typeof internalHistory;

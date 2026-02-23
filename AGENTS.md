@@ -29,11 +29,6 @@ Defined in `convex/schema.ts`:
   - sync cursor and health metadata per repo
   - index:
     - `by_key`
-- `alertsSent`
-  - tracks deduplicated outbound notifications
-  - current channel support: `teams`
-  - index:
-    - `by_run_id`
 
 ## Sync behavior
 
@@ -44,7 +39,6 @@ Defined in `convex/schema.ts`:
   - incremental fetch via `since`/cursor window
   - max runs per sync capped for API safety
   - failed runs enriched via jobs/log parsing
-  - optional Teams notifications for selected failed workflows
   - upsert through internal mutations in `convex/internalHistory.ts`
 
 ## Request behavior
@@ -52,9 +46,6 @@ Defined in `convex/schema.ts`:
 - Dashboard calls `GET /api/history`
 - Route loads from Convex query `history:getHistory`
 - No direct GitHub API calls from this route
-- Teams pull API routes:
-  - `GET|POST /api/teams/notifications` -> `alerts:getPendingTeamsFailures`
-  - `POST /api/teams/ack` -> `alerts:acknowledgeTeamsFailures`
 
 ## Environment contracts
 
@@ -65,8 +56,6 @@ Required for sync action:
 - `GITHUB_TOKEN`
 - `GITHUB_OWNER`
 - `GITHUB_REPO`
-- `TEAMS_WEBHOOK_URL` (optional)
-- `TEAMS_ALERT_WORKFLOWS` (optional CSV workflow-name allowlist)
 
 ### Next/Vercel env
 
@@ -74,7 +63,11 @@ Required for API route:
 
 - `CONVEX_URL` (preferred in hosted env)
 - `NEXT_PUBLIC_CONVEX_URL` (used in local workflows)
-- `TEAMS_PULL_TOKEN` (optional shared secret for Teams pull endpoints)
+
+## Notifications
+
+Teams delivery is managed through the GitHub Notifications app in Teams using channel subscriptions.
+This repository does not expose custom Teams notification ingestion/ack APIs.
 
 ## Local workflow (Bun-first)
 
@@ -96,7 +89,6 @@ Required for API route:
 - Avoid increasing sync frequency below 5 minutes without rate-limit analysis.
 - Keep failure parsing deterministic and concise; avoid full-log storage.
 - Preserve filter + failure-first UX in dashboard edits.
-- Keep Teams alerting idempotent using `alertsSent`; do not send duplicate alerts for same run.
 
 ## Validation checklist
 
