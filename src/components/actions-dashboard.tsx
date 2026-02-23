@@ -310,7 +310,7 @@ export function ActionsDashboard({
       }));
   }, [filteredRuns]);
 
-  const avgDurationByWorkflow = useMemo(() => {
+  const totalDurationByWorkflow = useMemo(() => {
     const map = new Map<string, { totalMs: number; count: number }>();
     for (const run of filteredRuns) {
       if (run.status !== "completed") continue;
@@ -322,11 +322,11 @@ export function ActionsDashboard({
     return Array.from(map.entries())
       .map(([workflow, { totalMs, count }]) => ({
         workflow,
-        avgSeconds: Number((totalMs / count / 1000).toFixed(1)),
+        totalMinutes: Number((totalMs / 60_000).toFixed(1)),
         runs: count,
       }))
-      .sort((a, b) => b.avgSeconds - a.avgSeconds)
-      .slice(0, 7);
+      .sort((a, b) => b.totalMinutes - a.totalMinutes)
+      .slice(0, 9);
   }, [filteredRuns]);
 
   const passFailByDateData = useMemo(() => {
@@ -675,14 +675,14 @@ export function ActionsDashboard({
             </section>
 
             <section className="grid gap-4 lg:grid-cols-3">
-              <ChartCard title="Avg. Duration by Workflow" className="lg:col-span-2">
-                <ResponsiveContainer width="100%" height={Math.max(160, avgDurationByWorkflow.length * 36 + 32)}>
-                  <BarChart data={avgDurationByWorkflow} layout="vertical" margin={{ left: 20 }}>
+              <ChartCard title="Total Time by Workflow" className="lg:col-span-2">
+                <ResponsiveContainer width="100%" height={Math.max(160, totalDurationByWorkflow.length * 36 + 32)}>
+                  <BarChart data={totalDurationByWorkflow} layout="vertical" margin={{ left: 20 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
                     <XAxis
                       type="number"
                       tick={{ fontSize: 11, fill: "#94a3b8" }}
-                      tickFormatter={formatDurationAxisTick}
+                      tickFormatter={(v) => formatMinutesValue(Math.round(v))}
                       axisLine={{ stroke: "#e2e8f0" }}
                       tickLine={false}
                     />
@@ -700,14 +700,14 @@ export function ActionsDashboard({
                           valueFormatter={(value, name) =>
                             name === "runs"
                               ? `${value} run${value !== 1 ? "s" : ""}`
-                              : formatDurationFromSeconds(value)
+                              : formatMinutesValue(Math.round(value))
                           }
                         />
                       }
                     />
                     <Bar
-                      dataKey="avgSeconds"
-                      name="Avg. Duration"
+                      dataKey="totalMinutes"
+                      name="Total Time"
                       fill="#0284c7"
                       radius={[0, 4, 4, 0]}
                       animationDuration={chartAnimationMs}
