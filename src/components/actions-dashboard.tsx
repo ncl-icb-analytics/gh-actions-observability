@@ -326,7 +326,7 @@ export function ActionsDashboard({
         runs: count,
       }))
       .sort((a, b) => b.totalMinutes - a.totalMinutes)
-      .slice(0, 9);
+      .slice(0, 8);
   }, [filteredRuns]);
 
   const passFailByDateData = useMemo(() => {
@@ -676,7 +676,7 @@ export function ActionsDashboard({
 
             <section className="grid gap-4 lg:grid-cols-3">
               <ChartCard title="Total Time by Workflow" className="lg:col-span-2">
-                <ResponsiveContainer width="100%" height={Math.max(160, totalDurationByWorkflow.length * 36 + 32)}>
+                <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={totalDurationByWorkflow} layout="vertical" margin={{ left: 20 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
                     <XAxis
@@ -689,8 +689,8 @@ export function ActionsDashboard({
                     <YAxis
                       type="category"
                       dataKey="workflow"
-                      width={170}
-                      tick={{ fontSize: 11, fill: "#64748b" }}
+                      width={200}
+                      tick={{ fontSize: 11, fill: "#64748b", style: { whiteSpace: "nowrap" } }}
                       axisLine={false}
                       tickLine={false}
                     />
