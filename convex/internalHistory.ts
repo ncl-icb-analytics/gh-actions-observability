@@ -79,12 +79,37 @@ export const upsertRun = internalMutation({
       .withIndex("by_run_id", (q) => q.eq("runId", args.runId))
       .unique();
 
+    const hasMeaningfulChange =
+      !existing ||
+      existing.name !== args.name ||
+      existing.workflowName !== args.workflowName ||
+      existing.branch !== args.branch ||
+      existing.event !== args.event ||
+      existing.status !== args.status ||
+      existing.conclusion !== args.conclusion ||
+      existing.url !== args.url ||
+      existing.actor !== args.actor ||
+      existing.runNumber !== args.runNumber ||
+      existing.createdAt !== args.createdAt ||
+      existing.updatedAt !== args.updatedAt ||
+      existing.startedAt !== args.startedAt ||
+      existing.updatedAtMs !== args.updatedAtMs ||
+      existing.durationMs !== args.durationMs ||
+      (existing.failureSummary ?? undefined) !== args.failureSummary ||
+      JSON.stringify(existing.prNumbers) !== JSON.stringify(args.prNumbers) ||
+      JSON.stringify(existing.failurePoints ?? []) !== JSON.stringify(args.failurePoints ?? []);
+
+    if (!hasMeaningfulChange) {
+      return { changed: false };
+    }
+
     if (existing) {
       await ctx.db.patch(existing._id, args);
-      return;
+      return { changed: true };
     }
 
     await ctx.db.insert("runs", args);
+    return { changed: true };
   },
 });
 
@@ -94,12 +119,19 @@ export const getNonCompletedRuns = internalQuery({
   },
   handler: async (ctx, args) => {
     const limit = Math.min(300, Math.max(1, args.limit ?? 120));
-    const rows = await ctx.db
+    const queuedRows = await ctx.db
       .query("runs")
-      .withIndex("by_updated_at_ms")
+      .withIndex("by_status_updated_at_ms", (q) => q.eq("status", "queued"))
       .order("desc")
-      .take(1200);
+      .take(limit);
+    const inProgressRows = await ctx.db
+      .query("runs")
+      .withIndex("by_status_updated_at_ms", (q) => q.eq("status", "in_progress"))
+      .order("desc")
+      .take(limit);
 
-    return rows.filter((row) => row.status !== "completed").slice(0, limit);
+    return [...queuedRows, ...inProgressRows]
+      .sort((a, b) => b.updatedAtMs - a.updatedAtMs)
+      .slice(0, limit);
   },
 });

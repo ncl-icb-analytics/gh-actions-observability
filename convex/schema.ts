@@ -38,7 +38,8 @@ export default defineSchema({
     failurePoints: v.optional(v.array(v.string())),
   })
     .index("by_run_id", ["runId"])
-    .index("by_updated_at_ms", ["updatedAtMs"]),
+    .index("by_updated_at_ms", ["updatedAtMs"])
+    .index("by_status_updated_at_ms", ["status", "updatedAtMs"]),
 
   syncState: defineTable({
     key: v.string(),
