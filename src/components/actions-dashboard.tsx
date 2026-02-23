@@ -19,6 +19,7 @@ import type { ActionsHistoryResponse, ActionsRun } from "@/lib/types";
 
 const refreshMs = 60_000;
 const EMPTY_RUNS: ActionsRun[] = [];
+const chartAnimationMs = 180;
 type PeriodFilter = "24h" | "7d" | "30d" | "90d" | "all";
 
 const PERIOD_OPTIONS: Array<{ value: PeriodFilter; label: string }> = [
@@ -66,6 +67,27 @@ function formatAxisTime(value: number) {
   }).format(new Date(value));
 }
 
+function formatDurationFromSeconds(secondsValue: number) {
+  const seconds = Math.max(0, Math.round(secondsValue));
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  if (remainder === 0) {
+    return `${minutes}m`;
+  }
+  return `${minutes}m ${remainder}s`;
+}
+
+function formatDurationAxisTick(secondsValue: number) {
+  const seconds = Math.max(0, Math.round(secondsValue));
+  if (seconds < 120) {
+    return `${seconds}s`;
+  }
+  return `${Math.round(seconds / 60)}m`;
+}
+
 function getPeriodStart(period: PeriodFilter, endTime: Date) {
   if (period === "all") {
     return null;
@@ -108,6 +130,17 @@ function getDisplayFailurePoints(run: ActionsRun) {
   });
 }
 
+function extractFailureHeadline(summary: string | null) {
+  if (!summary) {
+    return null;
+  }
+  const firstColon = summary.indexOf(": ");
+  if (firstColon === -1) {
+    return summary;
+  }
+  return summary.slice(firstColon + 2);
+}
+
 export function ActionsDashboard() {
   const [data, setData] = useState<ActionsHistoryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -117,6 +150,8 @@ export function ActionsDashboard() {
   const [prFilter, setPrFilter] = useState("all");
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>("30d");
   const [query, setQuery] = useState("");
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [showAllFailures, setShowAllFailures] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -291,18 +326,48 @@ export function ActionsDashboard() {
         ts: new Date(run.updatedAt).getTime(),
         runNumber: run.runNumber,
         workflowName: run.workflowName,
-        minutes: Number((run.durationMs / 60_000).toFixed(2)),
+        durationSeconds: Number((run.durationMs / 1000).toFixed(1)),
       }));
   }, [filteredRuns]);
 
-  const workflowData = useMemo(() => {
-    const map = new Map<string, { workflow: string; success: number; failed: number }>();
+  const passFailByDateData = useMemo(() => {
+    const map = new Map<string, { day: string; success: number; failed: number }>();
 
     for (const run of filteredRuns) {
       if (run.status !== "completed") {
         continue;
       }
-      const current = map.get(run.workflowName) ?? { workflow: run.workflowName, success: 0, failed: 0 };
+
+      const day = new Intl.DateTimeFormat("en-CA", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date(run.updatedAt));
+
+      const current = map.get(day) ?? { day, success: 0, failed: 0 };
+      if (run.conclusion === "success") {
+        current.success += 1;
+      } else {
+        current.failed += 1;
+      }
+      map.set(day, current);
+    }
+
+    return Array.from(map.values()).sort((a, b) => a.day.localeCompare(b.day));
+  }, [filteredRuns]);
+
+  const failureByWorkflowTypeData = useMemo(() => {
+    const map = new Map<string, { workflow: string; failed: number; success: number }>();
+
+    for (const run of filteredRuns) {
+      if (run.status !== "completed") {
+        continue;
+      }
+      const current = map.get(run.workflowName) ?? {
+        workflow: run.workflowName,
+        failed: 0,
+        success: 0,
+      };
       if (run.conclusion === "success") {
         current.success += 1;
       } else {
@@ -312,7 +377,7 @@ export function ActionsDashboard() {
     }
 
     return Array.from(map.values())
-      .sort((a, b) => b.success + b.failed - (a.success + a.failed))
+      .sort((a, b) => b.failed - a.failed || b.success - a.success)
       .slice(0, 8);
   }, [filteredRuns]);
 
@@ -334,6 +399,13 @@ export function ActionsDashboard() {
       .slice(0, 7)
       .map(([name]) => name);
   }, [runsInPeriod]);
+
+  const recentFailedRuns = useMemo(() => {
+    return [...filteredRuns]
+      .filter((run) => run.status === "completed" && run.conclusion !== "success")
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }, [filteredRuns]);
+  const visibleRecentFailedRuns = showAllFailures ? recentFailedRuns : recentFailedRuns.slice(0, 3);
 
   const reportingPeriodLabel = useMemo(() => {
     if (periodFilter === "all") {
@@ -359,14 +431,16 @@ export function ActionsDashboard() {
   const hasVisibleRuns = filteredRuns.length > 0;
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(1200px_500px_at_20%_0%,#dbeafe_0%,#f8fafc_60%)] px-6 py-10 text-slate-900">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <header className="rounded-2xl border border-white/70 bg-white/80 p-6 shadow-lg shadow-slate-900/5 backdrop-blur">
-          <p className="text-xs uppercase tracking-[0.2em] text-slate-500">GitHub Actions Observability</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight">{data ? `${data.owner}/${data.repo}` : "Repository"}</h1>
-          <p className="mt-2 text-sm text-slate-600">
-            Polling every {Math.round(refreshMs / 1000)}s. Last refresh: {data ? formatTime(data.generatedAt) : "-"}
-          </p>
+    <main className="min-h-screen bg-[radial-gradient(1200px_500px_at_20%_0%,#dbeafe_0%,#f8fafc_60%)] px-5 py-6 text-slate-900">
+      <div className="mx-auto max-w-7xl space-y-4">
+        <header className="rounded-2xl border border-white/70 bg-white/80 px-4 py-3 shadow-lg shadow-slate-900/5 backdrop-blur">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">GitHub Actions Observability</p>
+          <div className="mt-1 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+            <h1 className="text-2xl font-semibold tracking-tight">{data ? `${data.owner}/${data.repo}` : "Repository"}</h1>
+            <p className="text-sm text-slate-600">
+              Last refresh: {data ? formatTime(data.generatedAt) : "-"} • Polling every {Math.round(refreshMs / 1000)}s
+            </p>
+          </div>
           <p className="mt-1 text-sm text-slate-600">Reporting period: {reportingPeriodLabel}</p>
         </header>
 
@@ -378,22 +452,33 @@ export function ActionsDashboard() {
         )}
 
         <section className="rounded-2xl border border-white/70 bg-white/90 p-4 shadow-lg shadow-slate-900/5">
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <h2 className="text-sm font-semibold text-slate-700">Focus History</h2>
-            <button
-              type="button"
-              onClick={() => {
-                setWorkflowFilter("all");
-                setBranchFilter("all");
-                setPrFilter("all");
-                setQuery("");
-              }}
-              className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
-            >
-              Clear filters
-            </button>
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-slate-700">Filters</h2>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowAdvancedFilters((current) => !current)}
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+              >
+                {showAdvancedFilters ? "Hide filters" : "More filters"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setWorkflowFilter("all");
+                  setBranchFilter("all");
+                  setPrFilter("all");
+                  setQuery("");
+                  setShowAllFailures(false);
+                }}
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+              >
+                Clear filters
+              </button>
+            </div>
           </div>
-          <div className="grid gap-3 md:grid-cols-5">
+
+          <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)]">
             <label className="space-y-1 text-xs text-slate-600">
               Period
               <select
@@ -410,80 +495,91 @@ export function ActionsDashboard() {
             </label>
 
             <label className="space-y-1 text-xs text-slate-600">
-              Workflow (Action)
-              <select
-                value={workflowFilter}
-                onChange={(event) => setWorkflowFilter(event.target.value)}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-              >
-                <option value="all">All workflows</option>
-                {workflowOptions.map((workflow) => (
-                  <option key={workflow} value={workflow}>
-                    {workflow}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="space-y-1 text-xs text-slate-600">
-              Branch
-              <select
-                value={branchFilter}
-                onChange={(event) => setBranchFilter(event.target.value)}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-              >
-                <option value="all">All branches</option>
-                {branchOptions.map((branch) => (
-                  <option key={branch} value={branch}>
-                    {branch}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="space-y-1 text-xs text-slate-600">
-              PR
-              <select
-                value={prFilter}
-                onChange={(event) => setPrFilter(event.target.value)}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-              >
-                <option value="all">All PRs</option>
-                {prOptions.map((prNumber) => (
-                  <option key={prNumber} value={String(prNumber)}>
-                    PR #{prNumber}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="space-y-1 text-xs text-slate-600">
               Search
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="workflow, branch, run #, actor"
+                placeholder="workflow, branch, PR, run #, actor"
                 className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400"
               />
             </label>
           </div>
 
-          <div className="mt-4 flex flex-wrap gap-2">
-            {topWorkflows.map((workflow) => (
-              <button
-                key={workflow}
-                type="button"
-                onClick={() => setWorkflowFilter(workflow)}
-                className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ${
-                  workflowFilter === workflow
-                    ? "bg-sky-100 text-sky-800 ring-sky-300"
-                    : "bg-slate-50 text-slate-600 ring-slate-200 hover:bg-slate-100"
-                }`}
-              >
-                {workflow}
-              </button>
-            ))}
+          <div className="mt-3">
+            <p className="mb-1 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">
+              Quick Workflow Filters
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {topWorkflows.map((workflow) => (
+                <button
+                  key={workflow}
+                  type="button"
+                  onClick={() => setWorkflowFilter(workflow)}
+                  className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ${
+                    workflowFilter === workflow
+                      ? "bg-sky-100 text-sky-800 ring-sky-300"
+                      : "bg-slate-50 text-slate-600 ring-slate-200 hover:bg-slate-100"
+                  }`}
+                >
+                  {workflow}
+                </button>
+              ))}
+            </div>
           </div>
+
+          {showAdvancedFilters && (
+            <>
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <label className="space-y-1 text-xs text-slate-600">
+                  Workflow (Action)
+                  <select
+                    value={workflowFilter}
+                    onChange={(event) => setWorkflowFilter(event.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                  >
+                    <option value="all">All workflows</option>
+                    {workflowOptions.map((workflow) => (
+                      <option key={workflow} value={workflow}>
+                        {workflow}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="space-y-1 text-xs text-slate-600">
+                  Branch
+                  <select
+                    value={branchFilter}
+                    onChange={(event) => setBranchFilter(event.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                  >
+                    <option value="all">All branches</option>
+                    {branchOptions.map((branch) => (
+                      <option key={branch} value={branch}>
+                        {branch}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="space-y-1 text-xs text-slate-600">
+                  PR
+                  <select
+                    value={prFilter}
+                    onChange={(event) => setPrFilter(event.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                  >
+                    <option value="all">All PRs</option>
+                    {prOptions.map((prNumber) => (
+                      <option key={prNumber} value={String(prNumber)}>
+                        PR #{prNumber}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </>
+          )}
         </section>
 
         {!hasRunsInPeriod && (
@@ -500,19 +596,82 @@ export function ActionsDashboard() {
 
         {hasVisibleRuns && (
           <>
-            <section className="grid gap-4 md:grid-cols-4">
-              <MetricCard label="Visible Runs" value={summary.total} />
-              <MetricCard label="Success Rate" value={`${summary.successRate}%`} />
+            <section className="grid gap-4 md:grid-cols-3">
               <MetricCard label="Failures" value={summary.failed} />
+              <MetricCard label="Success Rate" value={`${summary.successRate}%`} />
               <MetricCard label="Total Minutes (Est.)" value={formatMinutes(summary.totalDurationMs)} />
             </section>
+            <p className="text-sm text-slate-600">
+              {summary.total} visible runs in this view.
+            </p>
             <p className="text-xs text-slate-500">
               `Total Minutes (Est.)` uses workflow run durations. GitHub Usage Metrics reports billed job-minutes, so values will differ.
             </p>
 
+            {recentFailedRuns.length > 0 && (
+              <section className="rounded-2xl border border-rose-200 bg-rose-50/70 p-4 shadow-sm">
+                <div className="mb-2 flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-rose-900">Recent Failures</h2>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-rose-700">{visibleRecentFailedRuns.length} shown</span>
+                    {recentFailedRuns.length > 3 && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllFailures((current) => !current)}
+                        className="rounded-md border border-rose-200 bg-white px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50"
+                      >
+                        {showAllFailures ? "Show less" : `View all (${recentFailedRuns.length})`}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  {visibleRecentFailedRuns.map((run) => (
+                    <a
+                      key={`failure-${run.id}`}
+                      href={run.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block rounded-md border border-rose-100 bg-white px-3 py-2 text-sm hover:border-rose-300"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="truncate font-medium text-slate-900">
+                          {run.workflowName} #{run.runNumber}
+                          <span className="ml-2 text-xs font-normal text-slate-500">
+                            {run.prNumbers.length > 0
+                              ? `· PR #${run.prNumbers[0]} by ${run.actor}`
+                              : `· by ${run.actor}`}
+                          </span>
+                        </p>
+                        <span className="text-xs text-slate-500">{formatTime(run.updatedAt)}</span>
+                      </div>
+                      <p className="mt-1 text-xs font-medium text-rose-900">
+                        What failed: {extractFailureHeadline(run.failureSummary) ?? run.name}
+                      </p>
+                      {getDisplayFailurePoints(run).length > 0 && (
+                        <ul className="mt-1 space-y-0.5 text-xs text-slate-600">
+                          {getDisplayFailurePoints(run)
+                            .slice(0, 2)
+                            .map((point) => (
+                              <li key={`quick-${run.id}-${point}`} className="break-words">
+                                {point}
+                              </li>
+                            ))}
+                        </ul>
+                      )}
+                    </a>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            <section>
+              <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">Analytics</h2>
+            </section>
+
             <section className="grid gap-4 lg:grid-cols-3">
               <ChartCard title="Run Duration Trend" className="lg:col-span-2">
-                <ResponsiveContainer width="100%" height={260}>
+                <ResponsiveContainer width="100%" height={220}>
                   <LineChart data={trendData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                     <XAxis
@@ -524,9 +683,9 @@ export function ActionsDashboard() {
                       tick={{ fontSize: 11 }}
                       tickFormatter={formatAxisTime}
                     />
-                    <YAxis tick={{ fontSize: 11 }} unit="m" />
+                    <YAxis tick={{ fontSize: 11 }} tickFormatter={formatDurationAxisTick} />
                     <Tooltip
-                      formatter={(value) => `${value ?? 0} min`}
+                      formatter={(value) => formatDurationFromSeconds(Number(value ?? 0))}
                       labelFormatter={(value, payload) => {
                         const row = payload?.[0]?.payload as
                           | { runNumber?: number; workflowName?: string }
@@ -536,16 +695,30 @@ export function ActionsDashboard() {
                         return `${formatTime(new Date(Number(value)).toISOString())} (${runLabel}${workflowLabel})`;
                       }}
                     />
-                    <Line dataKey="minutes" type="linear" stroke="#0284c7" strokeWidth={3} dot={false} />
+                    <Line
+                      dataKey="durationSeconds"
+                      type="linear"
+                      stroke="#0284c7"
+                      strokeWidth={3}
+                      dot={false}
+                      animationDuration={chartAnimationMs}
+                    />
                   </LineChart>
                 </ResponsiveContainer>
               </ChartCard>
 
               <ChartCard title="Outcome Split">
-                <ResponsiveContainer width="100%" height={260}>
+                <ResponsiveContainer width="100%" height={220}>
                   <PieChart>
                     <Tooltip />
-                    <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={55} outerRadius={80}>
+                    <Pie
+                      data={pieData}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={55}
+                      outerRadius={80}
+                      animationDuration={chartAnimationMs}
+                    >
                       {pieData.map((entry) => (
                         <Cell key={entry.name} fill={entry.color} />
                       ))}
@@ -557,34 +730,82 @@ export function ActionsDashboard() {
 
             <section>
               <ChartCard title="Actions Minutes by Day (Estimated)">
-                <ResponsiveContainer width="100%" height={260}>
+                <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={minutesByDayData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                     <XAxis dataKey="day" tick={{ fontSize: 11 }} />
                     <YAxis tick={{ fontSize: 11 }} unit="m" />
                     <Tooltip formatter={(value) => `${value ?? 0} min`} />
-                    <Bar dataKey="minutes" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+                    <Bar
+                      dataKey="minutes"
+                      fill="#0ea5e9"
+                      radius={[4, 4, 0, 0]}
+                      animationDuration={chartAnimationMs}
+                    />
                   </BarChart>
                 </ResponsiveContainer>
               </ChartCard>
             </section>
 
-            <section>
-              <ChartCard title="Workflow Reliability (Filtered)">
-                <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={workflowData} layout="vertical" margin={{ left: 30 }}>
+            <section className="grid gap-4 lg:grid-cols-2">
+              <ChartCard title="Pass / Fail by Workflow Type">
+                <ResponsiveContainer width="100%" height={240}>
+                  <BarChart data={failureByWorkflowTypeData} layout="vertical" margin={{ left: 30 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                     <XAxis type="number" tick={{ fontSize: 11 }} />
-                    <YAxis type="category" dataKey="workflow" width={170} tick={{ fontSize: 11 }} />
+                    <YAxis type="category" dataKey="workflow" width={160} tick={{ fontSize: 11 }} />
                     <Tooltip />
-                    <Bar dataKey="success" stackId="a" fill="#10b981" radius={[0, 4, 4, 0]} />
-                    <Bar dataKey="failed" stackId="a" fill="#f43f5e" radius={[0, 4, 4, 0]} />
+                    <Bar
+                      dataKey="success"
+                      stackId="a"
+                      fill="#10b981"
+                      radius={[0, 4, 4, 0]}
+                      animationDuration={chartAnimationMs}
+                    />
+                    <Bar
+                      dataKey="failed"
+                      stackId="a"
+                      fill="#f43f5e"
+                      radius={[0, 4, 4, 0]}
+                      animationDuration={chartAnimationMs}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartCard>
+
+              <ChartCard
+                title={
+                  workflowFilter === "all"
+                    ? "Pass / Fail by Date (Filtered)"
+                    : `Pass / Fail by Date (${workflowFilter})`
+                }
+              >
+                <ResponsiveContainer width="100%" height={240}>
+                  <BarChart data={passFailByDateData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="day" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} />
+                    <Tooltip />
+                    <Bar
+                      dataKey="success"
+                      stackId="a"
+                      fill="#10b981"
+                      radius={[4, 4, 0, 0]}
+                      animationDuration={chartAnimationMs}
+                    />
+                    <Bar
+                      dataKey="failed"
+                      stackId="a"
+                      fill="#f43f5e"
+                      radius={[4, 4, 0, 0]}
+                      animationDuration={chartAnimationMs}
+                    />
                   </BarChart>
                 </ResponsiveContainer>
               </ChartCard>
             </section>
 
-            <section className="rounded-2xl border border-white/70 bg-white/85 p-5 shadow-lg shadow-slate-900/5 backdrop-blur">
+            <section className="rounded-2xl border border-white/70 bg-white/85 p-4 shadow-lg shadow-slate-900/5 backdrop-blur">
               <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-lg font-semibold">Run History (Filtered)</h2>
                 <div className="flex items-center gap-3">
@@ -597,7 +818,7 @@ export function ActionsDashboard() {
                 {filteredRuns.map((run) => {
                   const displayFailurePoints = getDisplayFailurePoints(run);
                   return (
-                    <article key={run.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <article key={run.id} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
                           <a
