@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useConvexConnectionState, useQuery } from "convex/react";
 import {
   Bar,
@@ -175,7 +175,8 @@ export function ActionsDashboard({
   const [query, setQuery] = useState("");
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [showAllFailures, setShowAllFailures] = useState(false);
-  const since = getPeriodSinceIso(periodFilter);
+  const [showConnectionWarning, setShowConnectionWarning] = useState(false);
+  const since = useMemo(() => getPeriodSinceIso(periodFilter), [periodFilter]);
   const connectionState = useConvexConnectionState();
   const liveData = useQuery("history:getHistory" as never, {
     since: since ?? undefined,
@@ -183,6 +184,15 @@ export function ActionsDashboard({
   } as never) as ActionsHistoryResponse | undefined;
   const data = liveData ?? initialData;
   const loading = data === null || data === undefined;
+
+  useEffect(() => {
+    if (connectionState.isWebSocketConnected || connectionState.hasInflightRequests) {
+      const clearTimeoutId = window.setTimeout(() => setShowConnectionWarning(false), 0);
+      return () => window.clearTimeout(clearTimeoutId);
+    }
+    const timeout = window.setTimeout(() => setShowConnectionWarning(true), 2500);
+    return () => window.clearTimeout(timeout);
+  }, [connectionState.hasInflightRequests, connectionState.isWebSocketConnected]);
 
   const runs = data?.runs ?? EMPTY_RUNS;
   const generatedAt = data?.generatedAt;
@@ -416,13 +426,13 @@ export function ActionsDashboard({
             <h1 className="text-2xl font-semibold tracking-tight">{data ? `${data.owner}/${data.repo}` : "Repository"}</h1>
             <p className="text-sm text-slate-600">
               Last refresh: {data ? formatTime(data.generatedAt) : "-"} •{" "}
-              {liveData ? "Live updates via Convex" : "Snapshot mode (realtime unavailable)"}
+              Data source: Convex cache
             </p>
           </div>
           <p className="mt-1 text-sm text-slate-600">Reporting period: {reportingPeriodLabel}</p>
         </header>
 
-        {!connectionState.isWebSocketConnected && !connectionState.hasInflightRequests && (
+        {showConnectionWarning && (
           <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
             Realtime connection to Convex is not established yet.
           </section>
