@@ -41,13 +41,20 @@ function formatMinutes(durationMs: number) {
   return Math.round(durationMs / 60_000);
 }
 
-function formatTime(value: string) {
+function formatTime(value: string | null) {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function formatDate(value: Date) {

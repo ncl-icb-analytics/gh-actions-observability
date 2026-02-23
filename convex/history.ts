@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, query } from "./_generated/server";
+import { action, internalAction, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 
@@ -57,6 +57,13 @@ type JobsPayload = {
       number: number;
     }>;
   }>;
+};
+
+const syncArgs = {
+  since: v.optional(v.string()),
+  maxRuns: v.optional(v.number()),
+  detailsLimit: v.optional(v.number()),
+  minIntervalMs: v.optional(v.number()),
 };
 
 function parseDurationMs(startedAt: string, updatedAt: string) {
@@ -291,13 +298,8 @@ async function fetchWorkflowRun(owner: string, repo: string, token: string, runI
   }
 }
 
-export const syncGithub = action({
-  args: {
-    since: v.optional(v.string()),
-    maxRuns: v.optional(v.number()),
-    detailsLimit: v.optional(v.number()),
-    minIntervalMs: v.optional(v.number()),
-  },
+export const syncGithubInternal = internalAction({
+  args: syncArgs,
   handler: async (ctx, args) => {
     const owner = process.env.GITHUB_OWNER;
     const repo = process.env.GITHUB_REPO;
@@ -345,6 +347,26 @@ export const syncGithub = action({
       const mergedRuns = Array.from(mergedRunMap.values()).sort(
         (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
       );
+      const runsToUpsert: Array<{
+        runId: number;
+        name: string;
+        workflowName: string;
+        branch: string;
+        event: string;
+        status: "queued" | "in_progress" | "completed";
+        conclusion: RunConclusion;
+        url: string;
+        actor: string;
+        runNumber: number;
+        prNumbers: number[];
+        createdAt: string;
+        updatedAt: string;
+        startedAt: string;
+        updatedAtMs: number;
+        durationMs: number;
+        failureSummary?: string;
+        failurePoints?: string[];
+      }> = [];
 
       for (let index = 0; index < mergedRuns.length; index += 1) {
         const run = mergedRuns[index];
@@ -418,7 +440,14 @@ export const syncGithub = action({
           }
         }
 
-        await ctx.runMutation(internal.internalHistory.upsertRun, base);
+        runsToUpsert.push(base);
+      }
+
+      // Batch upserts reduce function-call overhead and subscription churn.
+      for (let i = 0; i < runsToUpsert.length; i += 200) {
+        await ctx.runMutation(internal.internalHistory.upsertRunsBatch, {
+          runs: runsToUpsert.slice(i, i + 200),
+        });
       }
 
       await ctx.runMutation(internal.internalHistory.setSyncState, {
@@ -446,6 +475,13 @@ export const syncGithub = action({
   },
 });
 
+export const syncGithub = action({
+  args: syncArgs,
+  handler: async (ctx, args) => {
+    return ctx.runAction(internal.history.syncGithubInternal, args);
+  },
+});
+
 export const getHistory = query({
   args: {
     since: v.optional(v.string()),
@@ -454,9 +490,14 @@ export const getHistory = query({
   handler: async (ctx, args) => {
     const owner = process.env.GITHUB_OWNER ?? "unknown";
     const repo = process.env.GITHUB_REPO ?? "unknown";
+    const key = `${owner}/${repo}`;
     const maxRuns = Math.min(2000, Math.max(20, args.maxRuns ?? 900));
     const parsedSinceMs = args.since ? new Date(args.since).getTime() : Number.NaN;
     const sinceMs = Number.isFinite(parsedSinceMs) ? parsedSinceMs : null;
+    const state = await ctx.db
+      .query("syncState")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .unique();
 
     const rows =
       sinceMs === null
@@ -470,7 +511,7 @@ export const getHistory = query({
     return {
       owner,
       repo,
-      generatedAt: new Date().toISOString(),
+      generatedAt: state?.lastSyncedAt ?? null,
       runs: rows.map((row: Doc<"runs">) => ({
         id: row.runId,
         name: row.name,

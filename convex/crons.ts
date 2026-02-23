@@ -1,5 +1,5 @@
 import { cronJobs } from "convex/server";
-import { api } from "./_generated/api";
+import { internal } from "./_generated/api";
 
 const crons = cronJobs();
 
@@ -7,7 +7,7 @@ const crons = cronJobs();
 crons.interval(
   "sync-github-actions-history",
   { minutes: 1 },
-  api.history.syncGithub,
+  internal.history.syncGithubInternal,
   {
     maxRuns: 300,
     detailsLimit: 50,

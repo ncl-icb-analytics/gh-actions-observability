@@ -35,6 +35,6 @@ export type ActionsRun = {
 export type ActionsHistoryResponse = {
   owner: string;
   repo: string;
-  generatedAt: string;
+  generatedAt: string | null;
   runs: ActionsRun[];
 };

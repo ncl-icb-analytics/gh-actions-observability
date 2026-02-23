@@ -34,7 +34,7 @@ Defined in `convex/schema.ts`:
 
 - Cron schedule: `convex/crons.ts`
   - interval: every 1 minute
-  - job: `api.history.syncGithub`
+  - job: `internal.history.syncGithubInternal`
 - Sync implementation: `convex/history.ts`
   - incremental fetch via `since`/cursor window
   - max runs per sync capped for API safety
