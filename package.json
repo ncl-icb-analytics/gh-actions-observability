@@ -9,6 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "convex": "^1.32.0",
+    "convex-helpers": "^0.1.113",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",

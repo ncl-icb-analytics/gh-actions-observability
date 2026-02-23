@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -17,10 +17,16 @@ import {
 } from "recharts";
 import type { ActionsHistoryResponse, ActionsRun } from "@/lib/types";
 
-const refreshMs = 60_000;
+const refreshMs = 5 * 60_000;
 const EMPTY_RUNS: ActionsRun[] = [];
 const chartAnimationMs = 180;
 type PeriodFilter = "24h" | "7d" | "30d" | "90d" | "all";
+type ApiErrorResponse = {
+  error: string;
+  rateLimited?: boolean;
+  retryAfterSec?: number | null;
+  resetAt?: string | null;
+};
 
 const PERIOD_OPTIONS: Array<{ value: PeriodFilter; label: string }> = [
   { value: "24h", label: "Last 24 hours" },
@@ -152,6 +158,9 @@ export function ActionsDashboard() {
   const [query, setQuery] = useState("");
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [showAllFailures, setShowAllFailures] = useState(false);
+  const [errorHint, setErrorHint] = useState<string | null>(null);
+  const emptyFollowupTriggeredRef = useRef(false);
+  const immediateRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -168,19 +177,51 @@ export function ActionsDashboard() {
         }
 
         const response = await fetch(`/api/history?${params.toString()}`, { cache: "no-store" });
-        const json = (await response.json()) as ActionsHistoryResponse | { error: string };
+        const json = (await response.json()) as ActionsHistoryResponse | ApiErrorResponse;
 
         if (!response.ok || "error" in json) {
+          if ("error" in json && json.rateLimited) {
+            const retryNote = json.retryAfterSec
+              ? ` Retry after about ${json.retryAfterSec}s.`
+              : "";
+            const resetNote = json.resetAt
+              ? ` Limit resets at ${formatTime(json.resetAt)}.`
+              : "";
+            const rateLimitMessage = `${json.error}.${retryNote}${resetNote}`;
+            throw new Error(rateLimitMessage);
+          }
           throw new Error("error" in json ? json.error : "Unable to load history");
         }
 
         if (mounted) {
           setData(json);
           setError(null);
+          setErrorHint(null);
+
+          if (json.runs.length === 0 && !emptyFollowupTriggeredRef.current) {
+            emptyFollowupTriggeredRef.current = true;
+            immediateRetryTimerRef.current = setTimeout(() => {
+              void load();
+            }, 0);
+          } else if (json.runs.length > 0) {
+            emptyFollowupTriggeredRef.current = false;
+          }
         }
       } catch (err) {
         if (mounted) {
-          setError(err instanceof Error ? err.message : "Unknown error");
+          const message = err instanceof Error ? err.message : "Unknown error";
+          setError(message);
+          if (/GITHUB_TOKEN|GITHUB_OWNER|GITHUB_REPO|GITHUB_REPOSITORY|Missing GITHUB_/i.test(message)) {
+            setErrorHint(
+              "Set GITHUB_TOKEN and repository env vars before loading this dashboard.",
+            );
+          } else if (/rate limit/i.test(message)) {
+            setErrorHint(
+              "Polling will continue every 60s. Consider lowering load or waiting for the rate limit reset.",
+            );
+          } else {
+            setErrorHint(null);
+          }
         }
       } finally {
         if (mounted) {
@@ -194,6 +235,9 @@ export function ActionsDashboard() {
     return () => {
       mounted = false;
       clearInterval(timer);
+      if (immediateRetryTimerRef.current) {
+        clearTimeout(immediateRetryTimerRef.current);
+      }
     };
   }, [periodFilter]);
 
@@ -438,7 +482,7 @@ export function ActionsDashboard() {
           <div className="mt-1 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
             <h1 className="text-2xl font-semibold tracking-tight">{data ? `${data.owner}/${data.repo}` : "Repository"}</h1>
             <p className="text-sm text-slate-600">
-              Last refresh: {data ? formatTime(data.generatedAt) : "-"} • Polling every {Math.round(refreshMs / 1000)}s
+              Last refresh: {data ? formatTime(data.generatedAt) : "-"} • Refreshing every {Math.round(refreshMs / 60_000)}m
             </p>
           </div>
           <p className="mt-1 text-sm text-slate-600">Reporting period: {reportingPeriodLabel}</p>
@@ -447,7 +491,7 @@ export function ActionsDashboard() {
         {error && (
           <section className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-rose-800">
             {error}
-            <div className="mt-1 text-sm">Set `GITHUB_TOKEN` and repository env vars before loading this dashboard.</div>
+            {errorHint && <div className="mt-1 text-sm">{errorHint}</div>}
           </section>
         )}
 
