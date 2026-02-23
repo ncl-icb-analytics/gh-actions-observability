@@ -2,13 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useConvexConnectionState, useQuery } from "convex/react";
+import { api } from "../../convex/_generated/api";
 import {
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
-  Line,
-  LineChart,
+  Legend,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -38,7 +38,15 @@ function formatDuration(durationMs: number) {
 }
 
 function formatMinutes(durationMs: number) {
-  return Math.round(durationMs / 60_000);
+  const mins = Math.round(durationMs / 60_000);
+  return formatMinutesValue(mins);
+}
+
+function formatMinutesValue(mins: number) {
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remainder = mins % 60;
+  return remainder === 0 ? `${hours}h` : `${hours}h ${remainder}m`;
 }
 
 function formatTime(value: string | null) {
@@ -65,14 +73,6 @@ function formatDate(value: Date) {
   }).format(value);
 }
 
-function formatAxisTime(value: number) {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
 
 function formatDurationFromSeconds(secondsValue: number) {
   const seconds = Math.max(0, Math.round(secondsValue));
@@ -93,6 +93,12 @@ function formatDurationAxisTick(secondsValue: number) {
     return `${seconds}s`;
   }
   return `${Math.round(seconds / 60)}m`;
+}
+
+function formatShortDate(dateStr: string) {
+  const d = new Date(dateStr + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(d);
 }
 
 function getPeriodStart(period: PeriodFilter, endTime: Date) {
@@ -178,10 +184,10 @@ export function ActionsDashboard({
   const [showConnectionWarning, setShowConnectionWarning] = useState(false);
   const since = useMemo(() => getPeriodSinceIso(periodFilter), [periodFilter]);
   const connectionState = useConvexConnectionState();
-  const liveData = useQuery("history:getHistory" as never, {
+  const liveData = useQuery(api.history.getHistory, {
     since: since ?? undefined,
     maxRuns: getMaxRunsForPeriod(periodFilter),
-  } as never) as ActionsHistoryResponse | undefined;
+  }) as ActionsHistoryResponse | undefined;
   const data = liveData ?? initialData;
   const loading = data === null || data === undefined;
 
@@ -304,17 +310,23 @@ export function ActionsDashboard({
       }));
   }, [filteredRuns]);
 
-  const trendData = useMemo(() => {
-    const sorted = [...filteredRuns].sort(
-      (a, b) => new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime(),
-    );
-
-    return sorted.slice(-40).map((run) => ({
-        ts: new Date(run.updatedAt).getTime(),
-        runNumber: run.runNumber,
-        workflowName: run.workflowName,
-        durationSeconds: Number((run.durationMs / 1000).toFixed(1)),
-      }));
+  const avgDurationByWorkflow = useMemo(() => {
+    const map = new Map<string, { totalMs: number; count: number }>();
+    for (const run of filteredRuns) {
+      if (run.status !== "completed") continue;
+      const entry = map.get(run.workflowName) ?? { totalMs: 0, count: 0 };
+      entry.totalMs += run.durationMs;
+      entry.count += 1;
+      map.set(run.workflowName, entry);
+    }
+    return Array.from(map.entries())
+      .map(([workflow, { totalMs, count }]) => ({
+        workflow,
+        avgSeconds: Number((totalMs / count / 1000).toFixed(1)),
+        runs: count,
+      }))
+      .sort((a, b) => b.avgSeconds - a.avgSeconds)
+      .slice(0, 7);
   }, [filteredRuns]);
 
   const passFailByDateData = useMemo(() => {
@@ -592,13 +604,13 @@ export function ActionsDashboard({
             <section className="grid gap-4 md:grid-cols-3">
               <MetricCard label="Failures" value={summary.failed} />
               <MetricCard label="Success Rate" value={`${summary.successRate}%`} />
-              <MetricCard label="Total Minutes (Est.)" value={formatMinutes(summary.totalDurationMs)} />
+              <MetricCard label="Total Time (Est.)" value={formatMinutes(summary.totalDurationMs)} />
             </section>
             <p className="text-sm text-slate-600">
               {summary.total} visible runs in this view.
             </p>
             <p className="text-xs text-slate-500">
-              `Total Minutes (Est.)` uses workflow run durations. GitHub Usage Metrics reports billed job-minutes, so values will differ.
+              `Total Time (Est.)` uses workflow run durations. GitHub Usage Metrics reports billed job-minutes, so values will differ.
             </p>
 
             {recentFailedRuns.length > 0 && (
@@ -663,53 +675,67 @@ export function ActionsDashboard({
             </section>
 
             <section className="grid gap-4 lg:grid-cols-3">
-              <ChartCard title="Run Duration Trend" className="lg:col-span-2">
-                <ResponsiveContainer width="100%" height={220}>
-                  <LineChart data={trendData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+              <ChartCard title="Avg. Duration by Workflow" className="lg:col-span-2">
+                <ResponsiveContainer width="100%" height={Math.max(160, avgDurationByWorkflow.length * 36 + 32)}>
+                  <BarChart data={avgDurationByWorkflow} layout="vertical" margin={{ left: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
                     <XAxis
-                      dataKey="ts"
                       type="number"
-                      scale="time"
-                      domain={["dataMin", "dataMax"]}
-                      minTickGap={32}
-                      tick={{ fontSize: 11 }}
-                      tickFormatter={formatAxisTime}
+                      tick={{ fontSize: 11, fill: "#94a3b8" }}
+                      tickFormatter={formatDurationAxisTick}
+                      axisLine={{ stroke: "#e2e8f0" }}
+                      tickLine={false}
                     />
-                    <YAxis tick={{ fontSize: 11 }} tickFormatter={formatDurationAxisTick} />
+                    <YAxis
+                      type="category"
+                      dataKey="workflow"
+                      width={170}
+                      tick={{ fontSize: 11, fill: "#64748b" }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
                     <Tooltip
-                      formatter={(value) => formatDurationFromSeconds(Number(value ?? 0))}
-                      labelFormatter={(value, payload) => {
-                        const row = payload?.[0]?.payload as
-                          | { runNumber?: number; workflowName?: string }
-                          | undefined;
-                        const runLabel = row?.runNumber ? `Run #${row.runNumber}` : "Run";
-                        const workflowLabel = row?.workflowName ? ` - ${row.workflowName}` : "";
-                        return `${formatTime(new Date(Number(value)).toISOString())} (${runLabel}${workflowLabel})`;
-                      }}
+                      content={
+                        <ChartTooltipContent
+                          valueFormatter={(value, name) =>
+                            name === "runs"
+                              ? `${value} run${value !== 1 ? "s" : ""}`
+                              : formatDurationFromSeconds(value)
+                          }
+                        />
+                      }
                     />
-                    <Line
-                      dataKey="durationSeconds"
-                      type="linear"
-                      stroke="#0284c7"
-                      strokeWidth={3}
-                      dot={false}
+                    <Bar
+                      dataKey="avgSeconds"
+                      name="Avg. Duration"
+                      fill="#0284c7"
+                      radius={[0, 4, 4, 0]}
                       animationDuration={chartAnimationMs}
                     />
-                  </LineChart>
+                  </BarChart>
                 </ResponsiveContainer>
               </ChartCard>
 
               <ChartCard title="Outcome Split">
                 <ResponsiveContainer width="100%" height={220}>
                   <PieChart>
-                    <Tooltip />
+                    <Tooltip
+                      content={
+                        <ChartTooltipContent
+                          valueFormatter={(value, name) =>
+                            `${value} run${value !== 1 ? "s" : ""} (${name === "Success" ? summary.successRate : 100 - summary.successRate}%)`
+                          }
+                        />
+                      }
+                    />
                     <Pie
                       data={pieData}
                       dataKey="value"
                       nameKey="name"
                       innerRadius={55}
                       outerRadius={80}
+                      paddingAngle={2}
+                      strokeWidth={0}
                       animationDuration={chartAnimationMs}
                     >
                       {pieData.map((entry) => (
@@ -718,7 +744,7 @@ export function ActionsDashboard({
                     </Pie>
                     <text
                       x="50%"
-                      y="48%"
+                      y="46%"
                       textAnchor="middle"
                       dominantBaseline="central"
                       className="fill-slate-900 text-2xl font-semibold"
@@ -730,9 +756,9 @@ export function ActionsDashboard({
                       y="60%"
                       textAnchor="middle"
                       dominantBaseline="central"
-                      className="fill-slate-500 text-xs"
+                      className="fill-slate-400 text-[11px]"
                     >
-                      success
+                      success rate
                     </text>
                   </PieChart>
                 </ResponsiveContainer>
@@ -740,15 +766,34 @@ export function ActionsDashboard({
             </section>
 
             <section>
-              <ChartCard title="Actions Minutes by Day (Estimated)">
+              <ChartCard title="Actions Time by Day (Estimated)">
                 <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={minutesByDayData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="day" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} unit="m" />
-                    <Tooltip formatter={(value) => `${value ?? 0} min`} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                    <XAxis
+                      dataKey="day"
+                      tick={{ fontSize: 11, fill: "#94a3b8" }}
+                      tickFormatter={formatShortDate}
+                      axisLine={{ stroke: "#e2e8f0" }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: "#94a3b8" }}
+                      tickFormatter={(v) => formatMinutesValue(Math.round(v))}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      content={
+                        <ChartTooltipContent
+                          labelFormatter={(label) => formatShortDate(String(label))}
+                          valueFormatter={(value) => formatMinutesValue(Math.round(value))}
+                        />
+                      }
+                    />
                     <Bar
                       dataKey="minutes"
+                      name="Time"
                       fill="#0ea5e9"
                       radius={[4, 4, 0, 0]}
                       animationDuration={chartAnimationMs}
@@ -762,19 +807,44 @@ export function ActionsDashboard({
               <ChartCard title="Pass / Fail by Workflow Type">
                 <ResponsiveContainer width="100%" height={240}>
                   <BarChart data={failureByWorkflowTypeData} layout="vertical" margin={{ left: 30 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis type="number" tick={{ fontSize: 11 }} />
-                    <YAxis type="category" dataKey="workflow" width={160} tick={{ fontSize: 11 }} />
-                    <Tooltip />
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
+                    <XAxis
+                      type="number"
+                      tick={{ fontSize: 11, fill: "#94a3b8" }}
+                      axisLine={{ stroke: "#e2e8f0" }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      type="category"
+                      dataKey="workflow"
+                      width={160}
+                      tick={{ fontSize: 11, fill: "#64748b" }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      content={
+                        <ChartTooltipContent
+                          valueFormatter={(value) => `${value} run${value !== 1 ? "s" : ""}`}
+                        />
+                      }
+                    />
+                    <Legend
+                      iconSize={8}
+                      iconType="circle"
+                      wrapperStyle={{ fontSize: 12, color: "#64748b", paddingTop: 4 }}
+                    />
                     <Bar
                       dataKey="success"
+                      name="Success"
                       stackId="a"
                       fill="#10b981"
-                      radius={[4, 0, 0, 4]}
+                      radius={[0, 0, 0, 0]}
                       animationDuration={chartAnimationMs}
                     />
                     <Bar
                       dataKey="failed"
+                      name="Failed"
                       stackId="a"
                       fill="#f43f5e"
                       radius={[0, 4, 4, 0]}
@@ -787,25 +857,50 @@ export function ActionsDashboard({
               <ChartCard
                 title={
                   workflowFilter === "all"
-                    ? "Pass / Fail by Date (Filtered)"
+                    ? "Pass / Fail by Date"
                     : `Pass / Fail by Date (${workflowFilter})`
                 }
               >
                 <ResponsiveContainer width="100%" height={240}>
                   <BarChart data={passFailByDateData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="day" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} />
-                    <Tooltip />
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                    <XAxis
+                      dataKey="day"
+                      tick={{ fontSize: 11, fill: "#94a3b8" }}
+                      tickFormatter={formatShortDate}
+                      axisLine={{ stroke: "#e2e8f0" }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: "#94a3b8" }}
+                      axisLine={false}
+                      tickLine={false}
+                      allowDecimals={false}
+                    />
+                    <Tooltip
+                      content={
+                        <ChartTooltipContent
+                          labelFormatter={(label) => formatShortDate(String(label))}
+                          valueFormatter={(value) => `${value} run${value !== 1 ? "s" : ""}`}
+                        />
+                      }
+                    />
+                    <Legend
+                      iconSize={8}
+                      iconType="circle"
+                      wrapperStyle={{ fontSize: 12, color: "#64748b", paddingTop: 4 }}
+                    />
                     <Bar
                       dataKey="success"
+                      name="Success"
                       stackId="a"
                       fill="#10b981"
-                      radius={[0, 0, 4, 4]}
+                      radius={[0, 0, 0, 0]}
                       animationDuration={chartAnimationMs}
                     />
                     <Bar
                       dataKey="failed"
+                      name="Failed"
                       stackId="a"
                       fill="#f43f5e"
                       radius={[4, 4, 0, 0]}
@@ -917,3 +1012,52 @@ function ChartCard({
     </div>
   );
 }
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function ChartTooltipContent({
+  active,
+  payload,
+  label,
+  labelFormatter,
+  valueFormatter,
+}: {
+  active?: boolean;
+  payload?: any[];
+  label?: string | number;
+  labelFormatter?: (label: string | number, rows: Record<string, any>[]) => string;
+  valueFormatter?: (value: number, name: string) => string;
+}) {
+  if (!active || !payload?.length) return null;
+
+  const rows = payload.map((p: any) => p.payload ?? {});
+  const displayLabel = labelFormatter
+    ? labelFormatter(label ?? "", rows)
+    : String(label ?? "");
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white/95 px-3.5 py-2.5 shadow-xl shadow-slate-900/10 backdrop-blur">
+      {displayLabel && (
+        <p className="mb-1.5 border-b border-slate-100 pb-1.5 text-[11px] font-medium text-slate-500">
+          {displayLabel}
+        </p>
+      )}
+      <div className="space-y-0.5">
+        {payload.map((entry: any) => (
+          <div key={entry.dataKey ?? entry.name} className="flex items-center justify-between gap-6 text-[13px]">
+            <div className="flex items-center gap-1.5">
+              <span
+                className="inline-block h-2 w-2 rounded-sm"
+                style={{ backgroundColor: entry.color }}
+              />
+              <span className="capitalize text-slate-500">{entry.name}</span>
+            </div>
+            <span className="font-semibold tabular-nums text-slate-900">
+              {valueFormatter ? valueFormatter(Number(entry.value), entry.name) : entry.value}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */

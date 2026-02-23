@@ -7,7 +7,7 @@ import { api } from "../../convex/_generated/api";
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL ?? process.env.CONVEX_URL ?? null;
+  const convexUrl = process.env.CONVEX_URL ?? process.env.NEXT_PUBLIC_CONVEX_URL ?? null;
   if (!convexUrl) {
     return (
       <main className="min-h-screen bg-[radial-gradient(1200px_500px_at_20%_0%,#dbeafe_0%,#f8fafc_60%)] px-5 py-6 text-slate-900">

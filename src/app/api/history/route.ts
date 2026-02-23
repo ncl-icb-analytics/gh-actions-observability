@@ -3,7 +3,7 @@ import { ConvexHttpClient } from "convex/browser";
 import type { ActionsHistoryResponse } from "@/lib/types";
 
 function getConvexUrl() {
-  return process.env.NEXT_PUBLIC_CONVEX_URL ?? process.env.CONVEX_URL ?? null;
+  return process.env.CONVEX_URL ?? process.env.NEXT_PUBLIC_CONVEX_URL ?? null;
 }
 
 function parseLimit(raw: string | null, fallback: number, min: number, max: number) {

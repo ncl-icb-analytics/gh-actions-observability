@@ -87,6 +87,13 @@ function fallbackWorkflowName(path?: string) {
   return fileName.replace(".yml", "").replace(".yaml", "");
 }
 
+function normalizeWorkflowName(name: string) {
+  if (/^PR\s*#\d+$/i.test(name.trim())) {
+    return "CodeRabbit QA";
+  }
+  return name;
+}
+
 function stripAnsi(input: string) {
   return input.replace(/\u001B\[[0-9;]*m/g, "");
 }
@@ -391,7 +398,7 @@ export const syncGithub: ReturnType<typeof action> = action({
         } = {
           runId: run.id,
           name: resolveRunTitle(run),
-          workflowName: run.name || fallbackWorkflowName(run.path),
+          workflowName: normalizeWorkflowName(run.name || fallbackWorkflowName(run.path)),
           branch: run.head_branch,
           event: run.event,
           status: run.status,
