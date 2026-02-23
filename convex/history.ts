@@ -28,7 +28,7 @@ type WorkflowRunsPayload = {
     id: number;
     name: string;
     display_title: string;
-    path: string;
+    path?: string;
     head_branch: string;
     event: string;
     status: "queued" | "in_progress" | "completed";
@@ -43,6 +43,8 @@ type WorkflowRunsPayload = {
     run_started_at?: string;
   }>;
 };
+
+type WorkflowRun = WorkflowRunsPayload["workflow_runs"][number];
 
 type JobsPayload = {
   jobs: Array<{
@@ -77,7 +79,10 @@ function resolveRunTitle(run: WorkflowRunsPayload["workflow_runs"][number]) {
   return run.display_title || run.name;
 }
 
-function fallbackWorkflowName(path: string) {
+function fallbackWorkflowName(path?: string) {
+  if (!path) {
+    return "Unknown workflow";
+  }
   const fileName = path.split("/").pop() ?? "Unknown workflow";
   return fileName.replace(".yml", "").replace(".yaml", "");
 }
@@ -275,6 +280,17 @@ async function fetchWorkflowRuns(owner: string, repo: string, token: string, sin
   return allRuns.slice(0, maxRuns);
 }
 
+async function fetchWorkflowRun(owner: string, repo: string, token: string, runId: number) {
+  try {
+    return await ghFetchJson<WorkflowRun>(`/repos/${owner}/${repo}/actions/runs/${runId}`, token);
+  } catch (error) {
+    if (error instanceof Error && /GitHub API 404:/i.test(error.message)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 export const syncGithub = action({
   args: {
     since: v.optional(v.string()),
@@ -308,9 +324,30 @@ export const syncGithub = action({
 
     try {
       const workflowRuns = await fetchWorkflowRuns(owner, repo, token, effectiveSince, maxRuns);
+      const nonCompleted = await ctx.runQuery(internal.internalHistory.getNonCompletedRuns, { limit: 120 });
+      const refreshedNonCompleted: WorkflowRun[] = [];
 
-      for (let index = 0; index < workflowRuns.length; index += 1) {
-        const run = workflowRuns[index];
+      for (const run of nonCompleted) {
+        const refreshed = await fetchWorkflowRun(owner, repo, token, run.runId);
+        if (refreshed) {
+          refreshedNonCompleted.push(refreshed);
+        }
+      }
+
+      const mergedRunMap = new Map<number, WorkflowRun>();
+      for (const run of workflowRuns) {
+        mergedRunMap.set(run.id, run);
+      }
+      for (const run of refreshedNonCompleted) {
+        mergedRunMap.set(run.id, run);
+      }
+
+      const mergedRuns = Array.from(mergedRunMap.values()).sort(
+        (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+      );
+
+      for (let index = 0; index < mergedRuns.length; index += 1) {
+        const run = mergedRuns[index];
         const startedAt = run.run_started_at ?? run.created_at;
         const base: {
           runId: number;
@@ -393,7 +430,7 @@ export const syncGithub = action({
         lastError: undefined,
       });
 
-      return { synced: workflowRuns.length };
+      return { synced: mergedRuns.length, refreshedInProgress: refreshedNonCompleted.length };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown sync error";
       await ctx.runMutation(internal.internalHistory.setSyncState, {

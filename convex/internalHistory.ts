@@ -87,3 +87,19 @@ export const upsertRun = internalMutation({
     await ctx.db.insert("runs", args);
   },
 });
+
+export const getNonCompletedRuns = internalQuery({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.min(300, Math.max(1, args.limit ?? 120));
+    const rows = await ctx.db
+      .query("runs")
+      .withIndex("by_updated_at_ms")
+      .order("desc")
+      .take(1200);
+
+    return rows.filter((row) => row.status !== "completed").slice(0, limit);
+  },
+});
