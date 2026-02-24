@@ -202,6 +202,9 @@ export function ActionsDashboard({
     return new Date(base - 2 * 60_000).toISOString();
   });
 
+  // Track the generatedAt we last snapshotted so we can skip redundant refreshes
+  const lastSnapshotSyncedAt = useRef<string | null>(initialData?.generatedAt ?? null);
+
   const fetchSnapshot = useCallback(
     async (period: PeriodFilter) => {
       try {
@@ -211,6 +214,7 @@ export function ActionsDashboard({
           maxRuns: getMaxRunsForPeriod(period),
         })) as ActionsHistoryResponse;
         setSnapshot(result);
+        lastSnapshotSyncedAt.current = result.generatedAt;
         setTailSince(new Date(Date.now() - 2 * 60_000).toISOString());
       } catch (err) {
         console.warn("[snapshot] fetch failed, keeping previous:", err);
@@ -229,37 +233,46 @@ export function ActionsDashboard({
     fetchSnapshot(periodFilter);
   }, [periodFilter, fetchSnapshot]);
 
-  // Periodic snapshot refresh every 10 minutes
-  useEffect(() => {
-    const id = window.setInterval(() => fetchSnapshot(periodFilter), 10 * 60_000);
-    return () => window.clearInterval(id);
-  }, [periodFilter, fetchSnapshot]);
+  // Reactive sync timestamp — reads only 1 syncState doc, provides "Last refresh"
+  const generatedAt = useQuery(api.history.getSyncTimestamp) ?? snapshot?.generatedAt ?? null;
 
-  // Live tail: cheap reactive subscription (~5-20 docs instead of 900)
-  const tailData = useQuery(api.history.getHistory, {
+  // Periodic snapshot refresh every 30 minutes, but only if a new sync has occurred
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (generatedAt && generatedAt !== lastSnapshotSyncedAt.current) {
+        fetchSnapshot(periodFilter);
+      }
+    }, 30 * 60_000);
+    return () => window.clearInterval(id);
+  }, [periodFilter, fetchSnapshot, generatedAt]);
+
+  // Live tail: decoupled from syncState — only invalidated when run docs change
+  const tailRuns = useQuery(api.history.getRecentRuns, {
     since: tailSince,
     maxRuns: 200,
-  }) as ActionsHistoryResponse | undefined;
+  }) as ActionsRun[] | undefined;
 
   // Merge snapshot + tail by run ID, tail wins for updated runs
   const data = useMemo<ActionsHistoryResponse | null>(() => {
     if (!snapshot) return null;
-    if (!tailData || tailData.runs.length === 0) return snapshot;
+    if (!tailRuns || tailRuns.length === 0) {
+      return { ...snapshot, generatedAt };
+    }
 
     const runMap = new Map<number, ActionsRun>();
     for (const run of snapshot.runs) runMap.set(run.id, run);
-    for (const run of tailData.runs) runMap.set(run.id, run);
+    for (const run of tailRuns) runMap.set(run.id, run);
 
     return {
       owner: snapshot.owner,
       repo: snapshot.repo,
-      generatedAt: tailData.generatedAt ?? snapshot.generatedAt,
+      generatedAt,
       runs: Array.from(runMap.values()).sort(
         (a, b) =>
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       ),
     };
-  }, [snapshot, tailData]);
+  }, [snapshot, tailRuns, generatedAt]);
 
   const loading = data === null;
 
@@ -277,7 +290,6 @@ export function ActionsDashboard({
   }, [connectionState.hasInflightRequests, connectionState.isWebSocketConnected, hasConnectedOnce]);
 
   const runs = data?.runs ?? EMPTY_RUNS;
-  const generatedAt = data?.generatedAt;
   const periodEnd = useMemo(
     () => (generatedAt ? new Date(generatedAt) : new Date()),
     [generatedAt],

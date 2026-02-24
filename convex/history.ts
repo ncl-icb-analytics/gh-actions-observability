@@ -532,3 +532,59 @@ export const getHistory = query({
     };
   },
 });
+
+// Lightweight tail query — does NOT read syncState, so the reactive
+// subscription is only invalidated when actual run documents change.
+export const getRecentRuns = query({
+  args: {
+    since: v.string(),
+    maxRuns: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const maxRuns = Math.min(500, Math.max(10, args.maxRuns ?? 200));
+    const sinceMs = new Date(args.since).getTime();
+    if (!Number.isFinite(sinceMs)) {
+      return [];
+    }
+
+    const rows = await ctx.db
+      .query("runs")
+      .withIndex("by_updated_at_ms", (q) => q.gte("updatedAtMs", sinceMs))
+      .order("desc")
+      .take(maxRuns);
+
+    return rows.map((row: Doc<"runs">) => ({
+      id: row.runId,
+      name: row.name,
+      workflowName: row.workflowName,
+      branch: row.branch,
+      event: row.event,
+      status: row.status,
+      conclusion: row.conclusion,
+      url: row.url,
+      actor: row.actor,
+      runNumber: row.runNumber,
+      prNumbers: row.prNumbers,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      startedAt: row.startedAt,
+      durationMs: row.durationMs,
+      failureSummary: row.failureSummary ?? null,
+      failurePoints: row.failurePoints ?? [],
+    }));
+  },
+});
+
+// Tiny reactive query — reads only syncState (1 doc), provides "last synced"
+// timestamp to the UI without coupling it to the heavier run queries.
+export const getSyncTimestamp = query({
+  args: {},
+  handler: async (ctx) => {
+    const key = `${process.env.GITHUB_OWNER ?? "unknown"}/${process.env.GITHUB_REPO ?? "unknown"}`;
+    const state = await ctx.db
+      .query("syncState")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .unique();
+    return state?.lastSyncedAt ?? null;
+  },
+});
