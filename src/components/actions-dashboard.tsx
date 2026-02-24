@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConvexConnectionState, useQuery } from "convex/react";
-import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
 import {
   Bar,
@@ -172,10 +171,8 @@ function extractFailureHeadline(summary: string | null) {
 
 export function ActionsDashboard({
   initialData = null,
-  convexUrl,
 }: {
   initialData?: ActionsHistoryResponse | null;
-  convexUrl: string;
 }) {
   const [workflowFilter, setWorkflowFilter] = useState("all");
   const [branchFilter, setBranchFilter] = useState("all");
@@ -190,8 +187,6 @@ export function ActionsDashboard({
   const connectionState = useConvexConnectionState();
 
   // --- Snapshot + Live Tail (cuts Convex DB bandwidth ~90%) ---
-  const httpClient = useMemo(() => new ConvexHttpClient(convexUrl), [convexUrl]);
-
   const [snapshot, setSnapshot] = useState<ActionsHistoryResponse | null>(initialData);
 
   // Tail boundary: 2-min buffer before snapshot fetch time to avoid gaps
@@ -205,23 +200,24 @@ export function ActionsDashboard({
   // Track the generatedAt we last snapshotted so we can skip redundant refreshes
   const lastSnapshotSyncedAt = useRef<string | null>(initialData?.generatedAt ?? null);
 
-  const fetchSnapshot = useCallback(
-    async (period: PeriodFilter) => {
-      try {
-        const since = getPeriodSinceIso(period) ?? undefined;
-        const result = (await httpClient.query(api.history.getHistory, {
-          since,
-          maxRuns: getMaxRunsForPeriod(period),
-        })) as ActionsHistoryResponse;
-        setSnapshot(result);
-        lastSnapshotSyncedAt.current = result.generatedAt;
-        setTailSince(new Date(Date.now() - 2 * 60_000).toISOString());
-      } catch (err) {
-        console.warn("[snapshot] fetch failed, keeping previous:", err);
-      }
-    },
-    [httpClient],
-  );
+  // Fetch via /api/history which uses Next.js 'use cache' (hours profile) —
+  // completed runs are immutable so aggressive caching is safe.
+  const fetchSnapshot = useCallback(async (period: PeriodFilter) => {
+    try {
+      const params = new URLSearchParams();
+      const since = getPeriodSinceIso(period);
+      if (since) params.set("since", since);
+      params.set("maxRuns", String(getMaxRunsForPeriod(period)));
+      const res = await fetch(`/api/history?${params}`);
+      if (!res.ok) throw new Error(`snapshot fetch ${res.status}`);
+      const result: ActionsHistoryResponse = await res.json();
+      setSnapshot(result);
+      lastSnapshotSyncedAt.current = result.generatedAt;
+      setTailSince(new Date(Date.now() - 2 * 60_000).toISOString());
+    } catch (err) {
+      console.warn("[snapshot] fetch failed, keeping previous:", err);
+    }
+  }, []);
 
   // Re-fetch snapshot on period change (skip initial mount — SSR data is valid)
   const isInitialMount = useRef(true);

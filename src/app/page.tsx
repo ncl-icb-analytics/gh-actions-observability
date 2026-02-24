@@ -1,8 +1,7 @@
 import { ActionsDashboard } from "@/components/actions-dashboard";
 import { ConvexClientProvider } from "@/components/convex-client-provider";
-import { ConvexHttpClient } from "convex/browser";
+import { getCachedHistory } from "@/lib/cached-history";
 import type { ActionsHistoryResponse } from "@/lib/types";
-import { api } from "../../convex/_generated/api";
 
 export const dynamic = "force-dynamic";
 
@@ -20,17 +19,14 @@ export default async function Home() {
 
   let initialData: ActionsHistoryResponse | null = null;
   try {
-    const convex = new ConvexHttpClient(convexUrl);
-    initialData = (await convex.query(api.history.getHistory, {
-      maxRuns: 900,
-    })) as ActionsHistoryResponse;
+    initialData = await getCachedHistory(undefined, 900);
   } catch {
     initialData = null;
   }
 
   return (
     <ConvexClientProvider url={convexUrl}>
-      <ActionsDashboard initialData={initialData} convexUrl={convexUrl} />
+      <ActionsDashboard initialData={initialData} />
     </ConvexClientProvider>
   );
 }
