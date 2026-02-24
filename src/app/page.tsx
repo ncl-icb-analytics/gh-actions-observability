@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { ActionsDashboard } from "@/components/actions-dashboard";
 import { ConvexClientProvider } from "@/components/convex-client-provider";
 import { getCachedHistory } from "@/lib/cached-history";
@@ -23,8 +24,10 @@ export default async function Home() {
   }
 
   return (
-    <ConvexClientProvider url={convexUrl}>
-      <ActionsDashboard initialData={initialData} />
-    </ConvexClientProvider>
+    <Suspense>
+      <ConvexClientProvider url={convexUrl}>
+        <ActionsDashboard initialData={initialData} />
+      </ConvexClientProvider>
+    </Suspense>
   );
 }
