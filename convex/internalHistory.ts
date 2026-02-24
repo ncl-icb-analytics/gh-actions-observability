@@ -165,6 +165,21 @@ export const upsertRunsBatch = internalMutation({
   },
 });
 
+export const normalizeWorkflowNames = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const runs = await ctx.db.query("runs").collect();
+    let updated = 0;
+    for (const run of runs) {
+      if (/^PR\s*#\d+$/i.test(run.workflowName.trim())) {
+        await ctx.db.patch(run._id, { workflowName: "CodeRabbit QA" });
+        updated += 1;
+      }
+    }
+    return { updated, scanned: runs.length };
+  },
+});
+
 export const getNonCompletedRuns = internalQuery({
   args: {
     limit: v.optional(v.number()),

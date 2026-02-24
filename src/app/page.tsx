@@ -30,7 +30,7 @@ export default async function Home() {
 
   return (
     <ConvexClientProvider url={convexUrl}>
-      <ActionsDashboard initialData={initialData} />
+      <ActionsDashboard initialData={initialData} convexUrl={convexUrl} />
     </ConvexClientProvider>
   );
 }

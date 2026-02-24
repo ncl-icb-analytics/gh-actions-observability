@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConvexConnectionState, useQuery } from "convex/react";
+import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
 import {
   Bar,
@@ -171,11 +172,14 @@ function extractFailureHeadline(summary: string | null) {
 
 export function ActionsDashboard({
   initialData = null,
+  convexUrl,
 }: {
   initialData?: ActionsHistoryResponse | null;
+  convexUrl: string;
 }) {
   const [workflowFilter, setWorkflowFilter] = useState("all");
   const [branchFilter, setBranchFilter] = useState("all");
+  const [actorFilter, setActorFilter] = useState("all");
   const [prFilter, setPrFilter] = useState("all");
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>("30d");
   const [query, setQuery] = useState("");
@@ -183,14 +187,81 @@ export function ActionsDashboard({
   const [showAllFailures, setShowAllFailures] = useState(false);
   const [showConnectionWarning, setShowConnectionWarning] = useState(false);
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
-  const since = useMemo(() => getPeriodSinceIso(periodFilter), [periodFilter]);
   const connectionState = useConvexConnectionState();
-  const liveData = useQuery(api.history.getHistory, {
-    since: since ?? undefined,
-    maxRuns: getMaxRunsForPeriod(periodFilter),
+
+  // --- Snapshot + Live Tail (cuts Convex DB bandwidth ~90%) ---
+  const httpClient = useMemo(() => new ConvexHttpClient(convexUrl), [convexUrl]);
+
+  const [snapshot, setSnapshot] = useState<ActionsHistoryResponse | null>(initialData);
+
+  // Tail boundary: 2-min buffer before snapshot fetch time to avoid gaps
+  const [tailSince, setTailSince] = useState<string>(() => {
+    const base = initialData?.generatedAt
+      ? new Date(initialData.generatedAt).getTime()
+      : Date.now();
+    return new Date(base - 2 * 60_000).toISOString();
+  });
+
+  const fetchSnapshot = useCallback(
+    async (period: PeriodFilter) => {
+      try {
+        const since = getPeriodSinceIso(period) ?? undefined;
+        const result = (await httpClient.query(api.history.getHistory, {
+          since,
+          maxRuns: getMaxRunsForPeriod(period),
+        })) as ActionsHistoryResponse;
+        setSnapshot(result);
+        setTailSince(new Date(Date.now() - 2 * 60_000).toISOString());
+      } catch (err) {
+        console.warn("[snapshot] fetch failed, keeping previous:", err);
+      }
+    },
+    [httpClient],
+  );
+
+  // Re-fetch snapshot on period change (skip initial mount — SSR data is valid)
+  const isInitialMount = useRef(true);
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    fetchSnapshot(periodFilter);
+  }, [periodFilter, fetchSnapshot]);
+
+  // Periodic snapshot refresh every 10 minutes
+  useEffect(() => {
+    const id = window.setInterval(() => fetchSnapshot(periodFilter), 10 * 60_000);
+    return () => window.clearInterval(id);
+  }, [periodFilter, fetchSnapshot]);
+
+  // Live tail: cheap reactive subscription (~5-20 docs instead of 900)
+  const tailData = useQuery(api.history.getHistory, {
+    since: tailSince,
+    maxRuns: 200,
   }) as ActionsHistoryResponse | undefined;
-  const data = liveData ?? initialData;
-  const loading = data === null || data === undefined;
+
+  // Merge snapshot + tail by run ID, tail wins for updated runs
+  const data = useMemo<ActionsHistoryResponse | null>(() => {
+    if (!snapshot) return null;
+    if (!tailData || tailData.runs.length === 0) return snapshot;
+
+    const runMap = new Map<number, ActionsRun>();
+    for (const run of snapshot.runs) runMap.set(run.id, run);
+    for (const run of tailData.runs) runMap.set(run.id, run);
+
+    return {
+      owner: snapshot.owner,
+      repo: snapshot.repo,
+      generatedAt: tailData.generatedAt ?? snapshot.generatedAt,
+      runs: Array.from(runMap.values()).sort(
+        (a, b) =>
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+      ),
+    };
+  }, [snapshot, tailData]);
+
+  const loading = data === null;
 
   useEffect(() => {
     const isConnected = connectionState.isWebSocketConnected || connectionState.hasInflightRequests;
@@ -239,10 +310,17 @@ export function ActionsDashboard({
     [runsInPeriod],
   );
 
+  const actorOptions = useMemo(
+    () => Array.from(new Set(runsInPeriod.map((run) => run.actor))).sort((a, b) => a.localeCompare(b)),
+    [runsInPeriod],
+  );
+
   const effectiveWorkflowFilter =
     workflowFilter === "all" || workflowOptions.includes(workflowFilter) ? workflowFilter : "all";
   const effectiveBranchFilter =
     branchFilter === "all" || branchOptions.includes(branchFilter) ? branchFilter : "all";
+  const effectiveActorFilter =
+    actorFilter === "all" || actorOptions.includes(actorFilter) ? actorFilter : "all";
   const effectivePrFilter =
     prFilter === "all" || prOptions.includes(Number(prFilter)) ? prFilter : "all";
 
@@ -256,6 +334,10 @@ export function ActionsDashboard({
       }
 
       if (effectiveBranchFilter !== "all" && run.branch !== effectiveBranchFilter) {
+        return false;
+      }
+
+      if (effectiveActorFilter !== "all" && run.actor !== effectiveActorFilter) {
         return false;
       }
 
@@ -273,7 +355,7 @@ export function ActionsDashboard({
 
       return searchBlob.includes(normalizedQuery);
     });
-  }, [runsInPeriod, effectiveWorkflowFilter, effectiveBranchFilter, effectivePrFilter, query]);
+  }, [runsInPeriod, effectiveWorkflowFilter, effectiveBranchFilter, effectiveActorFilter, effectivePrFilter, query]);
 
   const summary = useMemo(() => {
     const completed = filteredRuns.filter((run) => run.status === "completed");
@@ -471,6 +553,7 @@ export function ActionsDashboard({
                 onClick={() => {
                   setWorkflowFilter("all");
                   setBranchFilter("all");
+                  setActorFilter("all");
                   setPrFilter("all");
                   setQuery("");
                   setShowAllFailures(false);
@@ -533,7 +616,7 @@ export function ActionsDashboard({
 
           {showAdvancedFilters && (
             <>
-              <div className="mt-3 grid gap-3 md:grid-cols-3">
+              <div className="mt-3 grid gap-3 md:grid-cols-4">
                 <label className="space-y-1 text-xs text-slate-600">
                   Workflow (Action)
                   <select
@@ -561,6 +644,22 @@ export function ActionsDashboard({
                     {branchOptions.map((branch) => (
                       <option key={branch} value={branch}>
                         {branch}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="space-y-1 text-xs text-slate-600">
+                  Actor
+                  <select
+                    value={effectiveActorFilter}
+                    onChange={(event) => setActorFilter(event.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                  >
+                    <option value="all">All actors</option>
+                    {actorOptions.map((actor) => (
+                      <option key={actor} value={actor}>
+                        {actor}
                       </option>
                     ))}
                   </select>
