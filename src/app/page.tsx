@@ -3,8 +3,6 @@ import { ConvexClientProvider } from "@/components/convex-client-provider";
 import { getCachedHistory } from "@/lib/cached-history";
 import type { ActionsHistoryResponse } from "@/lib/types";
 
-export const dynamic = "force-dynamic";
-
 export default async function Home() {
   const convexUrl = process.env.CONVEX_URL ?? process.env.NEXT_PUBLIC_CONVEX_URL ?? null;
   if (!convexUrl) {
