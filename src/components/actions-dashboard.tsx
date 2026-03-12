@@ -182,6 +182,8 @@ export function ActionsDashboard({
   const [query, setQuery] = useState("");
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [showAllFailures, setShowAllFailures] = useState(false);
+  const [visibleRunCount, setVisibleRunCount] = useState(50);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const [showConnectionWarning, setShowConnectionWarning] = useState(false);
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
   const connectionState = useConvexConnectionState();
@@ -365,6 +367,27 @@ export function ActionsDashboard({
     });
   }, [runsInPeriod, effectiveWorkflowFilter, effectiveBranchFilter, effectiveActorFilter, effectivePrFilter, query]);
 
+  // Reset visible count when filters change
+  useEffect(() => {
+    setVisibleRunCount(50);
+  }, [effectiveWorkflowFilter, effectiveBranchFilter, effectiveActorFilter, effectivePrFilter, query, periodFilter]);
+
+  // Infinite scroll: load more runs when sentinel enters viewport
+  useEffect(() => {
+    const sentinel = loadMoreRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleRunCount((prev) => prev + 50);
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  });
+
   const summary = useMemo(() => {
     const completed = filteredRuns.filter((run) => run.status === "completed");
     const successful = completed.filter((run) => run.conclusion === "success");
@@ -490,13 +513,14 @@ export function ActionsDashboard({
     }
     return Array.from(counts.entries())
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 7)
+      .slice(0, 12)
       .map(([name]) => name);
   }, [runsInPeriod]);
 
   const recentFailedRuns = useMemo(() => {
+    const cutoff = Date.now() - 48 * 60 * 60_000; // last 48 hours
     return [...filteredRuns]
-      .filter((run) => run.status === "completed" && run.conclusion !== "success")
+      .filter((run) => run.status === "completed" && run.conclusion !== "success" && new Date(run.updatedAt).getTime() >= cutoff)
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   }, [filteredRuns]);
   const visibleRecentFailedRuns = showAllFailures ? recentFailedRuns : recentFailedRuns.slice(0, 3);
@@ -728,7 +752,7 @@ export function ActionsDashboard({
             {recentFailedRuns.length > 0 && (
               <section className="rounded-2xl border border-rose-200 bg-rose-50/70 p-4 shadow-sm">
                 <div className="mb-2 flex items-center justify-between">
-                  <h2 className="text-sm font-semibold text-rose-900">Recent Failures</h2>
+                  <h2 className="text-sm font-semibold text-rose-900">Recent Failures <span className="font-normal text-rose-700">(last 48h)</span></h2>
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-rose-700">{visibleRecentFailedRuns.length} shown</span>
                     {recentFailedRuns.length > 3 && (
@@ -1027,13 +1051,15 @@ export function ActionsDashboard({
               <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-lg font-semibold">Run History (Filtered)</h2>
                 <div className="flex items-center gap-3">
-                  <span className="text-xs text-slate-500">{filteredRuns.length} run(s)</span>
+                  <span className="text-xs text-slate-500">
+                    {Math.min(visibleRunCount, filteredRuns.length)} of {filteredRuns.length} run(s)
+                  </span>
                   {loading && <span className="text-xs text-slate-500">Loading...</span>}
                 </div>
               </div>
 
               <div className="space-y-3">
-                {filteredRuns.map((run) => {
+                {filteredRuns.slice(0, visibleRunCount).map((run) => {
                   const displayFailurePoints = getDisplayFailurePoints(run);
                   return (
                     <article key={run.id} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -1090,6 +1116,11 @@ export function ActionsDashboard({
                     </article>
                   );
                 })}
+                {visibleRunCount < filteredRuns.length && (
+                  <div ref={loadMoreRef} className="flex justify-center py-4">
+                    <span className="text-xs text-slate-400">Loading more runs...</span>
+                  </div>
+                )}
               </div>
             </section>
           </>
