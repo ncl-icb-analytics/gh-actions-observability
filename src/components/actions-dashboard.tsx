@@ -749,63 +749,6 @@ export function ActionsDashboard({
               `Total Time (Est.)` uses workflow run durations. GitHub Usage Metrics reports billed job-minutes, so values will differ.
             </p>
 
-            {recentFailedRuns.length > 0 && (
-              <section className="rounded-2xl border border-rose-200 bg-rose-50/70 p-4 shadow-sm">
-                <div className="mb-2 flex items-center justify-between">
-                  <h2 className="text-sm font-semibold text-rose-900">Recent Failures <span className="font-normal text-rose-700">(last 48h)</span></h2>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-rose-700">{visibleRecentFailedRuns.length} shown</span>
-                    {recentFailedRuns.length > 3 && (
-                      <button
-                        type="button"
-                        onClick={() => setShowAllFailures((current) => !current)}
-                        className="rounded-md border border-rose-200 bg-white px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50"
-                      >
-                        {showAllFailures ? "Show less" : `View all (${recentFailedRuns.length})`}
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  {visibleRecentFailedRuns.map((run) => (
-                    <a
-                      key={`failure-${run.id}`}
-                      href={run.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block rounded-md border border-rose-100 bg-white px-3 py-2 text-sm hover:border-rose-300"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="truncate font-medium text-slate-900">
-                          {run.workflowName} #{run.runNumber}
-                          <span className="ml-2 text-xs font-normal text-slate-500">
-                            {run.prNumbers.length > 0
-                              ? `· PR #${run.prNumbers[0]} by ${run.actor}`
-                              : `· by ${run.actor}`}
-                          </span>
-                        </p>
-                        <span className="text-xs text-slate-500">{formatTime(run.updatedAt)}</span>
-                      </div>
-                      <p className="mt-1 text-xs font-medium text-rose-900">
-                        What failed: {extractFailureHeadline(run.failureSummary) ?? run.name}
-                      </p>
-                      {getDisplayFailurePoints(run).length > 0 && (
-                        <ul className="mt-1 space-y-0.5 text-xs text-slate-600">
-                          {getDisplayFailurePoints(run)
-                            .slice(0, 2)
-                            .map((point) => (
-                              <li key={`quick-${run.id}-${point}`} className="break-words">
-                                {point}
-                              </li>
-                            ))}
-                        </ul>
-                      )}
-                    </a>
-                  ))}
-                </div>
-              </section>
-            )}
-
             <section>
               <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">Analytics</h2>
             </section>
@@ -1046,6 +989,63 @@ export function ActionsDashboard({
                 </ResponsiveContainer>
               </ChartCard>
             </section>
+
+            {recentFailedRuns.length > 0 && (
+              <section className="rounded-2xl border border-rose-200 bg-rose-50/70 p-4 shadow-sm">
+                <div className="mb-2 flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-rose-900">Recent Failures <span className="font-normal text-rose-700">(last 48h)</span></h2>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-rose-700">{visibleRecentFailedRuns.length} shown</span>
+                    {recentFailedRuns.length > 3 && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllFailures((current) => !current)}
+                        className="rounded-md border border-rose-200 bg-white px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50"
+                      >
+                        {showAllFailures ? "Show less" : `View all (${recentFailedRuns.length})`}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  {visibleRecentFailedRuns.map((run) => (
+                    <a
+                      key={`failure-${run.id}`}
+                      href={run.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block rounded-md border border-rose-100 bg-white px-3 py-2 text-sm hover:border-rose-300"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="truncate font-medium text-slate-900">
+                          {run.workflowName} #{run.runNumber}
+                          <span className="ml-2 text-xs font-normal text-slate-500">
+                            {run.prNumbers.length > 0
+                              ? `· PR #${run.prNumbers[0]} by ${run.actor}`
+                              : `· by ${run.actor}`}
+                          </span>
+                        </p>
+                        <span className="text-xs text-slate-500">{formatTime(run.updatedAt)}</span>
+                      </div>
+                      <p className="mt-1 text-xs font-medium text-rose-900">
+                        What failed: {extractFailureHeadline(run.failureSummary) ?? run.name}
+                      </p>
+                      {getDisplayFailurePoints(run).length > 0 && (
+                        <ul className="mt-1 space-y-0.5 text-xs text-slate-600">
+                          {getDisplayFailurePoints(run)
+                            .slice(0, 2)
+                            .map((point) => (
+                              <li key={`quick-${run.id}-${point}`} className="break-words">
+                                {point}
+                              </li>
+                            ))}
+                        </ul>
+                      )}
+                    </a>
+                  ))}
+                </div>
+              </section>
+            )}
 
             <section className="rounded-2xl border border-white/70 bg-white/85 p-4 shadow-lg shadow-slate-900/5 backdrop-blur">
               <div className="mb-3 flex items-center justify-between">
