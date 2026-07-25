@@ -7,10 +7,8 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
-  Legend,
-  Pie,
-  PieChart,
+  ComposedChart,
+  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -20,153 +18,188 @@ import type { ActionsHistoryResponse, ActionsRun } from "@/lib/types";
 
 const EMPTY_RUNS: ActionsRun[] = [];
 const chartAnimationMs = 180;
-type PeriodFilter = "24h" | "7d" | "30d" | "90d" | "all";
+const initialVisibleRuns = 25;
 
-const PERIOD_OPTIONS: Array<{ value: PeriodFilter; label: string }> = [
-  { value: "24h", label: "Last 24 hours" },
-  { value: "7d", label: "Last 7 days" },
-  { value: "30d", label: "Last 30 days" },
-  { value: "90d", label: "Last 90 days" },
-  { value: "all", label: "All fetched runs" },
+type PeriodFilter = "24h" | "7d" | "30d" | "90d" | "all";
+type RunView = "all" | "failed" | "running" | "successful";
+type IconName =
+  | "activity"
+  | "arrow-up-right"
+  | "branch"
+  | "check"
+  | "chevron"
+  | "clock"
+  | "filter"
+  | "pulse"
+  | "search"
+  | "warning"
+  | "workflow"
+  | "x";
+
+const PERIOD_OPTIONS: Array<{ value: PeriodFilter; label: string; shortLabel: string }> = [
+  { value: "24h", label: "Last 24 hours", shortLabel: "24h" },
+  { value: "7d", label: "Last 7 days", shortLabel: "7d" },
+  { value: "30d", label: "Last 30 days", shortLabel: "30d" },
+  { value: "90d", label: "Last 90 days", shortLabel: "90d" },
+  { value: "all", label: "All fetched runs", shortLabel: "All" },
+];
+
+const RUN_VIEW_OPTIONS: Array<{ value: RunView; label: string }> = [
+  { value: "all", label: "All runs" },
+  { value: "failed", label: "Failed" },
+  { value: "running", label: "Running" },
+  { value: "successful", label: "Successful" },
 ];
 
 function formatDuration(durationMs: number) {
-  const totalSec = Math.round(durationMs / 1000);
-  const min = Math.floor(totalSec / 60);
-  const sec = totalSec % 60;
-  return `${min}m ${sec}s`;
-}
-
-function formatMinutes(durationMs: number) {
-  const mins = Math.round(durationMs / 60_000);
-  return formatMinutesValue(mins);
-}
-
-function formatMinutesValue(mins: number) {
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  const remainder = mins % 60;
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  if (minutes < 60) return `${minutes}m ${seconds}s`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
   return remainder === 0 ? `${hours}h` : `${hours}h ${remainder}m`;
 }
 
+function formatDurationAxis(minutes: number) {
+  if (minutes < 1) return "<1m";
+  if (minutes < 60) return `${Math.round(minutes)}m`;
+  return `${Math.round(minutes / 60)}h`;
+}
+
 function formatTime(value: string | null) {
-  if (!value) {
-    return "-";
-  }
+  if (!value) return "Not yet";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "-";
-  }
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
+  if (Number.isNaN(date.getTime())) return "Unknown";
+  return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
-    hour: "numeric",
+    month: "short",
+    hour: "2-digit",
     minute: "2-digit",
   }).format(date);
 }
 
-function formatDate(value: Date) {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(value);
+function formatRelativeTime(value: string | null) {
+  if (!value) return "not yet";
+  const time = new Date(value).getTime();
+  if (Number.isNaN(time)) return "unknown";
+  const differenceMinutes = Math.round((time - Date.now()) / 60_000);
+  const relative = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+  if (Math.abs(differenceMinutes) < 60) return relative.format(differenceMinutes, "minute");
+  const differenceHours = Math.round(differenceMinutes / 60);
+  if (Math.abs(differenceHours) < 24) return relative.format(differenceHours, "hour");
+  return relative.format(Math.round(differenceHours / 24), "day");
 }
 
-
-function formatDurationFromSeconds(secondsValue: number) {
-  const seconds = Math.max(0, Math.round(secondsValue));
-  if (seconds < 60) {
-    return `${seconds}s`;
-  }
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  if (remainder === 0) {
-    return `${minutes}m`;
-  }
-  return `${minutes}m ${remainder}s`;
+function formatShortDate(dateValue: string) {
+  const date = new Date(`${dateValue}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return dateValue;
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" }).format(date);
 }
 
-function formatDurationAxisTick(secondsValue: number) {
-  const seconds = Math.max(0, Math.round(secondsValue));
-  if (seconds < 120) {
-    return `${seconds}s`;
-  }
-  return `${Math.round(seconds / 60)}m`;
-}
-
-function formatShortDate(dateStr: string) {
-  const d = new Date(dateStr + "T00:00:00");
-  if (Number.isNaN(d.getTime())) return dateStr;
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(d);
-}
-
-function getPeriodStart(period: PeriodFilter, endTime: Date) {
-  if (period === "all") {
-    return null;
-  }
-  const map: Record<Exclude<PeriodFilter, "all">, number> = {
+function getPeriodMs(period: PeriodFilter) {
+  const durations: Record<Exclude<PeriodFilter, "all">, number> = {
     "24h": 24 * 60 * 60 * 1000,
     "7d": 7 * 24 * 60 * 60 * 1000,
     "30d": 30 * 24 * 60 * 60 * 1000,
     "90d": 90 * 24 * 60 * 60 * 1000,
   };
-  return new Date(endTime.getTime() - map[period]);
+  return period === "all" ? null : durations[period];
 }
 
-function getPeriodSinceIso(period: PeriodFilter) {
-  if (period === "all") {
-    return null;
-  }
-  const start = getPeriodStart(period, new Date());
-  return start?.toISOString() ?? null;
+function getFetchSinceIso(period: PeriodFilter) {
+  const duration = getPeriodMs(period);
+  if (!duration) return null;
+  return new Date(Date.now() - duration * 2).toISOString();
 }
 
 function getMaxRunsForPeriod(period: PeriodFilter) {
   switch (period) {
     case "24h":
-      return 200;
+      return 300;
     case "7d":
-      return 500;
+      return 700;
     case "30d":
-      return 900;
-    case "90d":
       return 1400;
+    case "90d":
     case "all":
-      return 1500;
+      return 2000;
   }
+}
+
+function isFailedRun(run: ActionsRun) {
+  return run.status === "completed" && run.conclusion !== "success";
+}
+
+function statusLabel(run: ActionsRun) {
+  if (run.status === "in_progress") return "Running";
+  if (run.status === "queued") return "Queued";
+  if (run.conclusion === "success") return "Passed";
+  if (run.conclusion === "cancelled") return "Cancelled";
+  if (run.conclusion === "timed_out") return "Timed out";
+  return "Failed";
 }
 
 function statusTone(run: ActionsRun) {
   if (run.status !== "completed") {
-    return "bg-amber-100 text-amber-800 ring-amber-200";
+    return "border-amber-200 bg-amber-50 text-amber-700";
   }
   if (run.conclusion === "success") {
-    return "bg-emerald-100 text-emerald-800 ring-emerald-200";
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
   }
-  return "bg-rose-100 text-rose-800 ring-rose-200";
+  if (run.conclusion === "cancelled" || run.conclusion === "skipped") {
+    return "border-slate-200 bg-slate-50 text-slate-600";
+  }
+  return "border-rose-200 bg-rose-50 text-rose-700";
 }
 
-function getDisplayFailurePoints(run: ActionsRun) {
-  if (!run.failureSummary) {
-    return run.failurePoints;
-  }
-  const summaryNorm = run.failureSummary.trim().replace(/\s+/g, " ").toLowerCase();
-  return run.failurePoints.filter((point) => {
-    const pointNorm = point.trim().replace(/\s+/g, " ").toLowerCase();
-    return pointNorm !== summaryNorm && !summaryNorm.includes(pointNorm);
-  });
+function statusDotTone(run: ActionsRun) {
+  if (run.status !== "completed") return "bg-amber-500";
+  if (run.conclusion === "success") return "bg-emerald-500";
+  if (run.conclusion === "cancelled" || run.conclusion === "skipped") return "bg-slate-400";
+  return "bg-rose-500";
 }
 
-function extractFailureHeadline(summary: string | null) {
-  if (!summary) {
-    return null;
-  }
+function extractFailureHeadline(summary: string | null, fallback: string) {
+  if (!summary) return fallback;
   const firstColon = summary.indexOf(": ");
-  if (firstColon === -1) {
-    return summary;
-  }
-  return summary.slice(firstColon + 2);
+  return firstColon === -1 ? summary : summary.slice(firstColon + 2);
+}
+
+function median(values: number[]) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
+function summarizeRuns(runs: ActionsRun[]) {
+  const completed = runs.filter((run) => run.status === "completed");
+  const successful = completed.filter((run) => run.conclusion === "success");
+  const failed = completed.filter((run) => run.conclusion !== "success");
+  const active = runs.filter((run) => run.status !== "completed");
+  const durations = completed.map((run) => run.durationMs).filter((duration) => duration > 0);
+
+  return {
+    total: runs.length,
+    completed: completed.length,
+    successful: successful.length,
+    failed: failed.length,
+    active: active.length,
+    successRate:
+      completed.length === 0 ? 0 : Math.round((successful.length / completed.length) * 100),
+    medianDurationMs: median(durations),
+  };
+}
+
+function runMatchesView(run: ActionsRun, view: RunView) {
+  if (view === "failed") return isFailedRun(run);
+  if (view === "running") return run.status !== "completed";
+  if (view === "successful") return run.status === "completed" && run.conclusion === "success";
+  return true;
 }
 
 export function ActionsDashboard({
@@ -178,50 +211,42 @@ export function ActionsDashboard({
   const [branchFilter, setBranchFilter] = useState("all");
   const [actorFilter, setActorFilter] = useState("all");
   const [prFilter, setPrFilter] = useState("all");
-  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>("30d");
+  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>("7d");
+  const [runView, setRunView] = useState<RunView>("all");
   const [query, setQuery] = useState("");
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [showAllFailures, setShowAllFailures] = useState(false);
-  const [visibleRunCount, setVisibleRunCount] = useState(50);
-  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const [visibleRunCount, setVisibleRunCount] = useState(initialVisibleRuns);
   const [showConnectionWarning, setShowConnectionWarning] = useState(false);
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
   const connectionState = useConvexConnectionState();
 
-  // --- Snapshot + Live Tail (cuts Convex DB bandwidth ~90%) ---
   const [snapshot, setSnapshot] = useState<ActionsHistoryResponse | null>(initialData);
-
-  // Tail boundary: 2-min buffer before snapshot fetch time to avoid gaps
   const [tailSince, setTailSince] = useState<string>(() => {
     const base = initialData?.generatedAt
       ? new Date(initialData.generatedAt).getTime()
       : Date.now();
     return new Date(base - 2 * 60_000).toISOString();
   });
-
-  // Track the generatedAt we last snapshotted so we can skip redundant refreshes
   const lastSnapshotSyncedAt = useRef<string | null>(initialData?.generatedAt ?? null);
 
-  // Fetch via /api/history which uses Next.js 'use cache' (hours profile) —
-  // completed runs are immutable so aggressive caching is safe.
   const fetchSnapshot = useCallback(async (period: PeriodFilter) => {
     try {
       const params = new URLSearchParams();
-      const since = getPeriodSinceIso(period);
+      const since = getFetchSinceIso(period);
       if (since) params.set("since", since);
       params.set("maxRuns", String(getMaxRunsForPeriod(period)));
-      const res = await fetch(`/api/history?${params}`);
-      if (!res.ok) throw new Error(`snapshot fetch ${res.status}`);
-      const result: ActionsHistoryResponse = await res.json();
+      const response = await fetch(`/api/history?${params}`);
+      if (!response.ok) throw new Error(`snapshot fetch ${response.status}`);
+      const result: ActionsHistoryResponse = await response.json();
       setSnapshot(result);
       lastSnapshotSyncedAt.current = result.generatedAt;
       setTailSince(new Date(Date.now() - 2 * 60_000).toISOString());
-    } catch (err) {
-      console.warn("[snapshot] fetch failed, keeping previous:", err);
+    } catch (error) {
+      console.warn("[snapshot] fetch failed, keeping previous:", error);
     }
   }, []);
 
-  // Re-fetch snapshot on period change (skip initial mount — SSR data is valid)
   const isInitialMount = useRef(true);
   useEffect(() => {
     if (isInitialMount.current) {
@@ -231,102 +256,113 @@ export function ActionsDashboard({
     fetchSnapshot(periodFilter);
   }, [periodFilter, fetchSnapshot]);
 
-  // Reactive sync timestamp — reads only 1 syncState doc, provides "Last refresh"
   const generatedAt = useQuery(api.history.getSyncTimestamp) ?? snapshot?.generatedAt ?? null;
 
-  // Periodic snapshot refresh every 30 minutes, but only if a new sync has occurred
   useEffect(() => {
-    const id = window.setInterval(() => {
+    const interval = window.setInterval(() => {
       if (generatedAt && generatedAt !== lastSnapshotSyncedAt.current) {
         fetchSnapshot(periodFilter);
       }
     }, 30 * 60_000);
-    return () => window.clearInterval(id);
+    return () => window.clearInterval(interval);
   }, [periodFilter, fetchSnapshot, generatedAt]);
 
-  // Live tail: decoupled from syncState — only invalidated when run docs change
   const tailRuns = useQuery(api.history.getRecentRuns, {
     since: tailSince,
     maxRuns: 200,
   }) as ActionsRun[] | undefined;
 
-  // Merge snapshot + tail by run ID, tail wins for updated runs
   const data = useMemo<ActionsHistoryResponse | null>(() => {
     if (!snapshot) return null;
     if (!tailRuns || tailRuns.length === 0) {
       return { ...snapshot, generatedAt };
     }
-
     const runMap = new Map<number, ActionsRun>();
     for (const run of snapshot.runs) runMap.set(run.id, run);
     for (const run of tailRuns) runMap.set(run.id, run);
-
     return {
       owner: snapshot.owner,
       repo: snapshot.repo,
       generatedAt,
       runs: Array.from(runMap.values()).sort(
-        (a, b) =>
-          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       ),
     };
   }, [snapshot, tailRuns, generatedAt]);
 
-  const loading = data === null;
-
   useEffect(() => {
-    const isConnected = connectionState.isWebSocketConnected || connectionState.hasInflightRequests;
-    if (isConnected) {
+    const connected =
+      connectionState.isWebSocketConnected || connectionState.hasInflightRequests;
+    if (connected) {
       setHasConnectedOnce(true);
       setShowConnectionWarning(false);
       return;
     }
-    // Only warn about lost connections, not initial connect delay
     if (!hasConnectedOnce) return;
     const timeout = window.setTimeout(() => setShowConnectionWarning(true), 8000);
     return () => window.clearTimeout(timeout);
-  }, [connectionState.hasInflightRequests, connectionState.isWebSocketConnected, hasConnectedOnce]);
+  }, [
+    connectionState.hasInflightRequests,
+    connectionState.isWebSocketConnected,
+    hasConnectedOnce,
+  ]);
 
   const runs = data?.runs ?? EMPTY_RUNS;
   const periodEnd = useMemo(
     () => (generatedAt ? new Date(generatedAt) : new Date()),
     [generatedAt],
   );
-  const periodStart = useMemo(
-    () => getPeriodStart(periodFilter, periodEnd),
-    [periodFilter, periodEnd],
-  );
+  const periodMs = getPeriodMs(periodFilter);
+  const currentStartMs = periodMs ? periodEnd.getTime() - periodMs : null;
+  const previousStartMs =
+    periodMs && currentStartMs !== null ? currentStartMs - periodMs : null;
 
-  const runsInPeriod = useMemo(() => {
-    if (!periodStart) {
-      return runs;
-    }
-    const threshold = periodStart.getTime();
-    return runs.filter((run) => new Date(run.updatedAt).getTime() >= threshold);
-  }, [runs, periodStart]);
+  const currentPeriodRuns = useMemo(() => {
+    if (currentStartMs === null) return runs;
+    return runs.filter((run) => new Date(run.updatedAt).getTime() >= currentStartMs);
+  }, [currentStartMs, runs]);
+
+  const previousPeriodRuns = useMemo(() => {
+    if (currentStartMs === null || previousStartMs === null) return EMPTY_RUNS;
+    return runs.filter((run) => {
+      const updatedAt = new Date(run.updatedAt).getTime();
+      return updatedAt >= previousStartMs && updatedAt < currentStartMs;
+    });
+  }, [currentStartMs, previousStartMs, runs]);
 
   const workflowOptions = useMemo(
-    () => Array.from(new Set(runsInPeriod.map((run) => run.workflowName))).sort((a, b) => a.localeCompare(b)),
-    [runsInPeriod],
+    () =>
+      Array.from(new Set(currentPeriodRuns.map((run) => run.workflowName))).sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    [currentPeriodRuns],
   );
-
   const branchOptions = useMemo(
-    () => Array.from(new Set(runsInPeriod.map((run) => run.branch))).sort((a, b) => a.localeCompare(b)),
-    [runsInPeriod],
+    () =>
+      Array.from(new Set(currentPeriodRuns.map((run) => run.branch))).sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    [currentPeriodRuns],
   );
-
-  const prOptions = useMemo(
-    () => Array.from(new Set(runsInPeriod.flatMap((run) => run.prNumbers))).sort((a, b) => b - a),
-    [runsInPeriod],
-  );
-
   const actorOptions = useMemo(
-    () => Array.from(new Set(runsInPeriod.map((run) => run.actor))).sort((a, b) => a.localeCompare(b)),
-    [runsInPeriod],
+    () =>
+      Array.from(new Set(currentPeriodRuns.map((run) => run.actor))).sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    [currentPeriodRuns],
+  );
+  const prOptions = useMemo(
+    () =>
+      Array.from(new Set(currentPeriodRuns.flatMap((run) => run.prNumbers))).sort(
+        (a, b) => b - a,
+      ),
+    [currentPeriodRuns],
   );
 
   const effectiveWorkflowFilter =
-    workflowFilter === "all" || workflowOptions.includes(workflowFilter) ? workflowFilter : "all";
+    workflowFilter === "all" || workflowOptions.includes(workflowFilter)
+      ? workflowFilter
+      : "all";
   const effectiveBranchFilter =
     branchFilter === "all" || branchOptions.includes(branchFilter) ? branchFilter : "all";
   const effectiveActorFilter =
@@ -334,925 +370,1228 @@ export function ActionsDashboard({
   const effectivePrFilter =
     prFilter === "all" || prOptions.includes(Number(prFilter)) ? prFilter : "all";
 
-  const filteredRuns = useMemo(() => {
-    const selectedPr = effectivePrFilter === "all" ? null : Number(effectivePrFilter);
-    const normalizedQuery = query.trim().toLowerCase();
-
-    return runsInPeriod.filter((run) => {
-      if (effectiveWorkflowFilter !== "all" && run.workflowName !== effectiveWorkflowFilter) {
+  const matchesDimensions = useCallback(
+    (run: ActionsRun) => {
+      if (
+        effectiveWorkflowFilter !== "all" &&
+        run.workflowName !== effectiveWorkflowFilter
+      ) {
         return false;
       }
-
       if (effectiveBranchFilter !== "all" && run.branch !== effectiveBranchFilter) {
         return false;
       }
-
       if (effectiveActorFilter !== "all" && run.actor !== effectiveActorFilter) {
         return false;
       }
-
-      if (selectedPr !== null && !run.prNumbers.includes(selectedPr)) {
+      if (
+        effectivePrFilter !== "all" &&
+        !run.prNumbers.includes(Number(effectivePrFilter))
+      ) {
         return false;
       }
-
-      if (!normalizedQuery) {
-        return true;
-      }
-
-      const searchBlob = [run.workflowName, run.name, run.branch, run.actor, `${run.runNumber}`, run.prNumbers.join(" ")]
-        .join(" ")
-        .toLowerCase();
-
-      return searchBlob.includes(normalizedQuery);
-    });
-  }, [runsInPeriod, effectiveWorkflowFilter, effectiveBranchFilter, effectiveActorFilter, effectivePrFilter, query]);
-
-  // Reset visible count when filters change
-  useEffect(() => {
-    setVisibleRunCount(50);
-  }, [effectiveWorkflowFilter, effectiveBranchFilter, effectiveActorFilter, effectivePrFilter, query, periodFilter]);
-
-  // Infinite scroll: load more runs when sentinel enters viewport
-  useEffect(() => {
-    const sentinel = loadMoreRef.current;
-    if (!sentinel) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          setVisibleRunCount((prev) => prev + 50);
-        }
-      },
-      { rootMargin: "200px" },
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  });
-
-  const summary = useMemo(() => {
-    const completed = filteredRuns.filter((run) => run.status === "completed");
-    const successful = completed.filter((run) => run.conclusion === "success");
-    const failed = completed.filter((run) => run.conclusion !== "success");
-
-    const successRate = completed.length === 0 ? 0 : Math.round((successful.length / completed.length) * 100);
-    const totalDurationMs = completed.reduce((acc, run) => acc + run.durationMs, 0);
-
-    return {
-      total: filteredRuns.length,
-      completed: completed.length,
-      successful: successful.length,
-      failed: failed.length,
-      successRate,
-      totalDurationMs,
-    };
-  }, [filteredRuns]);
-
-  const minutesByDayData = useMemo(() => {
-    const grouped = new Map<string, number>();
-    for (const run of filteredRuns) {
-      if (run.status !== "completed") {
-        continue;
-      }
-      const day = new Intl.DateTimeFormat("en-CA", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      }).format(new Date(run.updatedAt));
-      grouped.set(day, (grouped.get(day) ?? 0) + run.durationMs);
-    }
-
-    return Array.from(grouped.entries())
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([day, durationMs]) => ({
-        day,
-        minutes: Number((durationMs / 60_000).toFixed(1)),
-      }));
-  }, [filteredRuns]);
-
-  const totalDurationByWorkflow = useMemo(() => {
-    const map = new Map<string, { totalMs: number; count: number }>();
-    for (const run of filteredRuns) {
-      if (run.status !== "completed") continue;
-      const entry = map.get(run.workflowName) ?? { totalMs: 0, count: 0 };
-      entry.totalMs += run.durationMs;
-      entry.count += 1;
-      map.set(run.workflowName, entry);
-    }
-    return Array.from(map.entries())
-      .map(([workflow, { totalMs, count }]) => ({
-        workflow,
-        totalMinutes: Number((totalMs / 60_000).toFixed(1)),
-        runs: count,
-      }))
-      .sort((a, b) => b.totalMinutes - a.totalMinutes)
-      .slice(0, 8);
-  }, [filteredRuns]);
-
-  const passFailByDateData = useMemo(() => {
-    const map = new Map<string, { day: string; success: number; failed: number }>();
-
-    for (const run of filteredRuns) {
-      if (run.status !== "completed") {
-        continue;
-      }
-
-      const day = new Intl.DateTimeFormat("en-CA", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      }).format(new Date(run.updatedAt));
-
-      const current = map.get(day) ?? { day, success: 0, failed: 0 };
-      if (run.conclusion === "success") {
-        current.success += 1;
-      } else {
-        current.failed += 1;
-      }
-      map.set(day, current);
-    }
-
-    return Array.from(map.values()).sort((a, b) => a.day.localeCompare(b.day));
-  }, [filteredRuns]);
-
-  const failureByWorkflowTypeData = useMemo(() => {
-    const map = new Map<string, { workflow: string; failed: number; success: number }>();
-
-    for (const run of filteredRuns) {
-      if (run.status !== "completed") {
-        continue;
-      }
-      const current = map.get(run.workflowName) ?? {
-        workflow: run.workflowName,
-        failed: 0,
-        success: 0,
-      };
-      if (run.conclusion === "success") {
-        current.success += 1;
-      } else {
-        current.failed += 1;
-      }
-      map.set(run.workflowName, current);
-    }
-
-    return Array.from(map.values())
-      .sort((a, b) => b.failed - a.failed || b.success - a.success)
-      .slice(0, 8);
-  }, [filteredRuns]);
-
-  const pieData = useMemo(
-    () => [
-      { name: "Success", value: summary.successful, color: "#10b981" },
-      { name: "Failed", value: summary.failed, color: "#f43f5e" },
+      return true;
+    },
+    [
+      effectiveActorFilter,
+      effectiveBranchFilter,
+      effectivePrFilter,
+      effectiveWorkflowFilter,
     ],
-    [summary.failed, summary.successful],
   );
 
-  const topWorkflows = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const run of runsInPeriod) {
-      counts.set(run.workflowName, (counts.get(run.workflowName) ?? 0) + 1);
-    }
-    return Array.from(counts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 12)
-      .map(([name]) => name);
-  }, [runsInPeriod]);
+  const scopedRuns = useMemo(
+    () => currentPeriodRuns.filter(matchesDimensions),
+    [currentPeriodRuns, matchesDimensions],
+  );
+  const scopedPreviousRuns = useMemo(
+    () => previousPeriodRuns.filter(matchesDimensions),
+    [previousPeriodRuns, matchesDimensions],
+  );
+  const summary = useMemo(() => summarizeRuns(scopedRuns), [scopedRuns]);
+  const previousSummary = useMemo(
+    () => summarizeRuns(scopedPreviousRuns),
+    [scopedPreviousRuns],
+  );
+  const successRateDelta =
+    periodFilter === "all" || previousSummary.completed === 0
+      ? null
+      : summary.successRate - previousSummary.successRate;
 
-  const recentFailedRuns = useMemo(() => {
-    const cutoff = Date.now() - 48 * 60 * 60_000; // last 48 hours
-    return [...filteredRuns]
-      .filter((run) => run.status === "completed" && run.conclusion !== "success" && new Date(run.updatedAt).getTime() >= cutoff)
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-  }, [filteredRuns]);
-  const visibleRecentFailedRuns = showAllFailures ? recentFailedRuns : recentFailedRuns.slice(0, 3);
+  const explorerRuns = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return scopedRuns.filter((run) => {
+      if (!runMatchesView(run, runView)) return false;
+      if (!normalizedQuery) return true;
+      return [
+        run.workflowName,
+        run.name,
+        run.branch,
+        run.actor,
+        run.runNumber,
+        ...run.prNumbers,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedQuery);
+    });
+  }, [query, runView, scopedRuns]);
 
-  const reportingPeriodLabel = useMemo(() => {
-    if (periodFilter === "all") {
-      if (runs.length === 0) {
-        return "All fetched runs (no data loaded yet)";
-      }
-      const sorted = [...runs].sort(
-        (a, b) => new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime(),
+  useEffect(() => {
+    setVisibleRunCount(initialVisibleRuns);
+  }, [
+    effectiveActorFilter,
+    effectiveBranchFilter,
+    effectivePrFilter,
+    effectiveWorkflowFilter,
+    periodFilter,
+    query,
+    runView,
+  ]);
+
+  const recentFailures = useMemo(() => {
+    const cutoff = periodEnd.getTime() - 48 * 60 * 60_000;
+    return scopedRuns
+      .filter((run) => isFailedRun(run) && new Date(run.updatedAt).getTime() >= cutoff)
+      .sort(
+        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       );
-      const start = new Date(sorted[0].updatedAt);
-      const end = new Date(sorted[sorted.length - 1].updatedAt);
-      return `All fetched runs: ${formatDate(start)} to ${formatDate(end)}`;
+  }, [periodEnd, scopedRuns]);
+  const visibleFailures = showAllFailures
+    ? recentFailures
+    : recentFailures.slice(0, 5);
+
+  const workflowStats = useMemo(() => {
+    const grouped = new Map<string, ActionsRun[]>();
+    for (const run of scopedRuns) {
+      const workflowRuns = grouped.get(run.workflowName) ?? [];
+      workflowRuns.push(run);
+      grouped.set(run.workflowName, workflowRuns);
     }
+    return Array.from(grouped.entries())
+      .map(([workflow, workflowRuns]) => {
+        const stats = summarizeRuns(workflowRuns);
+        return {
+          workflow,
+          runs: stats.total,
+          failed: stats.failed,
+          successRate: stats.successRate,
+          medianMinutes: Number((stats.medianDurationMs / 60_000).toFixed(1)),
+        };
+      })
+      .sort((a, b) => b.failed - a.failed || a.successRate - b.successRate)
+      .slice(0, 8);
+  }, [scopedRuns]);
 
-    if (!periodStart) {
-      return "Reporting period unavailable";
+  const reliabilityTrend = useMemo(() => {
+    const grouped = new Map<
+      string,
+      { day: string; completed: number; successful: number; failed: number }
+    >();
+    for (const run of scopedRuns) {
+      if (run.status !== "completed") continue;
+      const day = new Intl.DateTimeFormat("en-CA", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date(run.updatedAt));
+      const current = grouped.get(day) ?? {
+        day,
+        completed: 0,
+        successful: 0,
+        failed: 0,
+      };
+      current.completed += 1;
+      if (run.conclusion === "success") current.successful += 1;
+      else current.failed += 1;
+      grouped.set(day, current);
     }
+    return Array.from(grouped.values())
+      .sort((a, b) => a.day.localeCompare(b.day))
+      .map((item) => ({
+        ...item,
+        successRate:
+          item.completed === 0 ? 0 : Math.round((item.successful / item.completed) * 100),
+      }));
+  }, [scopedRuns]);
 
-    return `${PERIOD_OPTIONS.find((option) => option.value === periodFilter)?.label}: ${formatDate(periodStart)} to ${formatDate(periodEnd)}`;
-  }, [periodFilter, periodStart, periodEnd, runs]);
+  const hasActiveFilters =
+    effectiveWorkflowFilter !== "all" ||
+    effectiveBranchFilter !== "all" ||
+    effectiveActorFilter !== "all" ||
+    effectivePrFilter !== "all";
 
-  const hasRunsInPeriod = runsInPeriod.length > 0;
-  const hasVisibleRuns = filteredRuns.length > 0;
+  const clearFilters = () => {
+    setWorkflowFilter("all");
+    setBranchFilter("all");
+    setActorFilter("all");
+    setPrFilter("all");
+    setQuery("");
+    setRunView("all");
+    setShowAllFailures(false);
+  };
+
+  if (!data) {
+    return <LoadingDashboard />;
+  }
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(1200px_500px_at_20%_0%,#dbeafe_0%,#f8fafc_60%)] px-5 py-6 text-slate-900">
-      <div className="mx-auto max-w-7xl space-y-4">
-        <header className="rounded-2xl border border-white/70 bg-white/80 px-4 py-3 shadow-lg shadow-slate-900/5 backdrop-blur">
-          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">GitHub Actions Observability</p>
-          <div className="mt-1 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-            <h1 className="text-2xl font-semibold tracking-tight">{data ? `${data.owner}/${data.repo}` : "Repository"}</h1>
-            <p className="text-sm text-slate-600">
-              Last refresh: {data ? formatTime(data.generatedAt) : "-"} •{" "}
-              Data source: Convex cache
-            </p>
+    <main className="min-h-screen bg-[#f4f6f9] text-slate-950">
+      <header className="border-b border-white/10 bg-[#0b1220] text-white">
+        <div className="mx-auto flex max-w-[1480px] items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="grid size-9 shrink-0 place-items-center rounded-xl border border-white/10 bg-white/10 text-sky-300 shadow-inner">
+              <Icon name="workflow" className="size-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="truncate text-sm font-semibold tracking-tight sm:text-base">
+                  {data.owner}/{data.repo}
+                </p>
+                <span className="hidden rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-slate-400 sm:inline">
+                  Actions
+                </span>
+              </div>
+              <p className="truncate text-xs text-slate-400">Workflow operations</p>
+            </div>
           </div>
-          <p className="mt-1 text-sm text-slate-600">Reporting period: {reportingPeriodLabel}</p>
-        </header>
+          <div className="flex shrink-0 items-center gap-2 text-xs text-slate-400">
+            <span
+              className={`size-2 rounded-full ${
+                showConnectionWarning ? "bg-amber-400" : "bg-emerald-400"
+              }`}
+            />
+            <span className="hidden sm:inline">
+              {showConnectionWarning ? "Reconnecting" : "Live"}
+            </span>
+            <span className="hidden text-slate-600 sm:inline">•</span>
+            <span title={formatTime(data.generatedAt)}>
+              Updated {formatRelativeTime(data.generatedAt)}
+            </span>
+          </div>
+        </div>
+      </header>
 
-        {showConnectionWarning && (
-          <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-            Realtime connection to Convex is not established yet.
-          </section>
-        )}
-
-        <section className="rounded-2xl border border-white/70 bg-white/90 p-4 shadow-lg shadow-slate-900/5">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-slate-700">Filters</h2>
-            <div className="flex items-center gap-2">
+      <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 shadow-sm shadow-slate-950/[0.03] backdrop-blur">
+        <div className="mx-auto flex max-w-[1480px] items-center justify-between gap-3 overflow-x-auto px-4 py-2.5 sm:px-6 lg:px-8">
+          <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+            {PERIOD_OPTIONS.map((option) => (
               <button
+                key={option.value}
                 type="button"
-                onClick={() => setShowAdvancedFilters((current) => !current)}
-                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                onClick={() => setPeriodFilter(option.value)}
+                aria-pressed={periodFilter === option.value}
+                title={option.label}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                  periodFilter === option.value
+                    ? "bg-white text-slate-950 shadow-sm"
+                    : "text-slate-500 hover:text-slate-800"
+                }`}
               >
-                {showAdvancedFilters ? "Hide filters" : "More filters"}
+                {option.shortLabel}
               </button>
+            ))}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {hasActiveFilters && (
               <button
                 type="button"
-                onClick={() => {
-                  setWorkflowFilter("all");
-                  setBranchFilter("all");
-                  setActorFilter("all");
-                  setPrFilter("all");
-                  setQuery("");
-                  setShowAllFailures(false);
-                }}
-                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                onClick={clearFilters}
+                className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800 sm:flex"
               >
+                <Icon name="x" className="size-3.5" />
                 Clear filters
               </button>
-            </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowAdvancedFilters((current) => !current)}
+              aria-expanded={showAdvancedFilters}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
+                showAdvancedFilters || hasActiveFilters
+                  ? "border-sky-200 bg-sky-50 text-sky-700"
+                  : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+              }`}
+            >
+              <Icon name="filter" className="size-3.5" />
+              Filters
+              {hasActiveFilters && (
+                <span className="grid size-4 place-items-center rounded-full bg-sky-600 text-[9px] text-white">
+                  {
+                    [
+                      effectiveWorkflowFilter,
+                      effectiveBranchFilter,
+                      effectiveActorFilter,
+                      effectivePrFilter,
+                    ].filter((value) => value !== "all").length
+                  }
+                </span>
+              )}
+            </button>
           </div>
+        </div>
 
-          <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)]">
-            <label className="space-y-1 text-xs text-slate-600">
-              Period
-              <select
-                value={periodFilter}
-                onChange={(event) => setPeriodFilter(event.target.value as PeriodFilter)}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-              >
-                {PERIOD_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="space-y-1 text-xs text-slate-600">
-              Search
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="workflow, branch, PR, run #, actor"
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400"
+        {showAdvancedFilters && (
+          <div className="border-t border-slate-100 bg-white">
+            <div className="mx-auto grid max-w-[1480px] gap-3 px-4 py-3 sm:grid-cols-2 sm:px-6 lg:grid-cols-4 lg:px-8">
+              <FilterSelect
+                label="Workflow"
+                value={effectiveWorkflowFilter}
+                onChange={setWorkflowFilter}
+                options={workflowOptions}
+                allLabel="All workflows"
               />
-            </label>
+              <FilterSelect
+                label="Branch"
+                value={effectiveBranchFilter}
+                onChange={setBranchFilter}
+                options={branchOptions}
+                allLabel="All branches"
+              />
+              <FilterSelect
+                label="Actor"
+                value={effectiveActorFilter}
+                onChange={setActorFilter}
+                options={actorOptions}
+                allLabel="All actors"
+              />
+              <label className="space-y-1 text-xs font-medium text-slate-500">
+                Pull request
+                <select
+                  value={effectivePrFilter}
+                  onChange={(event) => setPrFilter(event.target.value)}
+                  className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+                >
+                  <option value="all">All pull requests</option>
+                  {prOptions.map((prNumber) => (
+                    <option key={prNumber} value={String(prNumber)}>
+                      PR #{prNumber}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="mx-auto max-w-[1480px] space-y-6 px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
+        {showConnectionWarning && (
+          <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <Icon name="warning" className="size-4 shrink-0" />
+            Live updates are reconnecting. Cached run data remains available.
+          </div>
+        )}
+
+        <section aria-labelledby="overview-heading">
+          <div className="mb-3 flex items-end justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-700">
+                Current health
+              </p>
+              <h1 id="overview-heading" className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">
+                {summary.failed > 0
+                  ? `${summary.failed} run${summary.failed === 1 ? "" : "s"} need attention`
+                  : summary.active > 0
+                    ? `${summary.active} workflow${summary.active === 1 ? "" : "s"} in progress`
+                    : "All workflows are healthy"}
+              </h1>
+            </div>
+            <p className="hidden text-xs text-slate-500 sm:block">
+              {PERIOD_OPTIONS.find((option) => option.value === periodFilter)?.label}
+              {hasActiveFilters ? " · filtered" : ""}
+            </p>
           </div>
 
-          <div className="mt-3">
-            <p className="mb-1 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">
-              Quick Workflow Filters
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricCard
+              icon="pulse"
+              label="Success rate"
+              value={`${summary.successRate}%`}
+              detail={
+                successRateDelta === null
+                  ? `${summary.completed} completed runs`
+                  : `${successRateDelta >= 0 ? "+" : ""}${successRateDelta} pts vs previous period`
+              }
+              tone={
+                summary.successRate >= 95
+                  ? "positive"
+                  : summary.successRate >= 85
+                    ? "warning"
+                    : "negative"
+              }
+            />
+            <MetricCard
+              icon="warning"
+              label="Failed"
+              value={summary.failed}
+              detail={
+                summary.failed === 0
+                  ? "No failed runs"
+                  : `${recentFailures.length} in the last 48 hours`
+              }
+              tone={summary.failed > 0 ? "negative" : "positive"}
+            />
+            <MetricCard
+              icon="activity"
+              label="Runs"
+              value={summary.total}
+              detail={
+                summary.active > 0
+                  ? `${summary.active} currently active`
+                  : "No workflows currently active"
+              }
+              tone={summary.active > 0 ? "info" : "neutral"}
+            />
+            <MetricCard
+              icon="clock"
+              label="Median duration"
+              value={formatDuration(summary.medianDurationMs)}
+              detail="Completed workflow runs"
+              tone="neutral"
+            />
+          </div>
+        </section>
+
+        <section
+          aria-labelledby="attention-heading"
+          className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.65fr)_minmax(320px,0.85fr)]"
+        >
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm shadow-slate-950/[0.04]">
+            <SectionHeader
+              eyebrow="Needs attention"
+              title="Recent failures"
+              description="Failed runs from the last 48 hours, newest first."
+              icon="warning"
+              action={
+                recentFailures.length > 5 ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllFailures((current) => !current)}
+                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
+                  >
+                    {showAllFailures ? "Show fewer" : `View all ${recentFailures.length}`}
+                  </button>
+                ) : null
+              }
+            />
+
+            {visibleFailures.length > 0 ? (
+              <div className="divide-y divide-slate-100">
+                {visibleFailures.map((run) => (
+                  <a
+                    key={run.id}
+                    href={run.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="group grid gap-3 px-4 py-4 transition hover:bg-slate-50/80 sm:grid-cols-[minmax(0,1fr)_auto] sm:px-5"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="size-2 shrink-0 rounded-full bg-rose-500" />
+                        <p className="truncate text-sm font-semibold text-slate-900">
+                          {run.workflowName}
+                          <span className="ml-1.5 font-mono text-xs font-medium text-slate-400">
+                            #{run.runNumber}
+                          </span>
+                        </p>
+                      </div>
+                      <p className="mt-1.5 line-clamp-2 pl-4 text-sm leading-5 text-slate-700">
+                        {extractFailureHeadline(run.failureSummary, run.name)}
+                      </p>
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 pl-4 text-xs text-slate-500">
+                        <span className="flex items-center gap-1">
+                          <Icon name="branch" className="size-3.5" />
+                          {run.branch}
+                        </span>
+                        {run.prNumbers[0] && <span>PR #{run.prNumbers[0]}</span>}
+                        <span>{run.actor}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 pl-4 sm:flex-col sm:items-end sm:justify-center sm:pl-0">
+                      <span className="text-xs text-slate-500">{formatRelativeTime(run.updatedAt)}</span>
+                      <span className="flex items-center gap-1 text-xs font-semibold text-sky-700 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100">
+                        Open run
+                        <Icon name="arrow-up-right" className="size-3.5" />
+                      </span>
+                    </div>
+                  </a>
+                ))}
+              </div>
+            ) : (
+              <div className="grid min-h-64 place-items-center px-6 py-10 text-center">
+                <div>
+                  <div className="mx-auto grid size-11 place-items-center rounded-full bg-emerald-50 text-emerald-600">
+                    <Icon name="check" className="size-5" />
+                  </div>
+                  <p className="mt-3 text-sm font-semibold text-slate-900">
+                    No recent failures
+                  </p>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Nothing has failed in this view during the last 48 hours.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm shadow-slate-950/[0.04]">
+            <SectionHeader
+              eyebrow="By workflow"
+              title="Reliability watch"
+              description="Lowest-performing workflows in this view."
+              icon="workflow"
+            />
+            {workflowStats.length > 0 ? (
+              <div className="divide-y divide-slate-100 px-4">
+                {workflowStats.slice(0, 6).map((workflow) => (
+                  <button
+                    type="button"
+                    key={workflow.workflow}
+                    onClick={() => setWorkflowFilter(workflow.workflow)}
+                    className="group w-full py-3 text-left"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="truncate text-sm font-medium text-slate-800 group-hover:text-sky-700">
+                        {workflow.workflow}
+                      </p>
+                      <span
+                        className={`shrink-0 font-mono text-xs font-semibold ${
+                          workflow.successRate >= 95
+                            ? "text-emerald-600"
+                            : workflow.successRate >= 85
+                              ? "text-amber-600"
+                              : "text-rose-600"
+                        }`}
+                      >
+                        {workflow.successRate}%
+                      </span>
+                    </div>
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className={`h-full rounded-full ${
+                          workflow.successRate >= 95
+                            ? "bg-emerald-500"
+                            : workflow.successRate >= 85
+                              ? "bg-amber-500"
+                              : "bg-rose-500"
+                        }`}
+                        style={{ width: `${workflow.successRate}%` }}
+                      />
+                    </div>
+                    <p className="mt-1.5 text-xs text-slate-400">
+                      {workflow.runs} runs · {workflow.failed} failed
+                    </p>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="px-5 py-12 text-center text-sm text-slate-500">
+                No workflow data for this period.
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section aria-labelledby="trends-heading">
+          <div className="mb-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Trends
             </p>
-            <div className="flex flex-wrap gap-2">
-              {topWorkflows.map((workflow) => (
-                <button
-                  key={workflow}
-                  type="button"
-                  onClick={() => setWorkflowFilter(workflow)}
-                  className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ${
-                    workflowFilter === workflow
-                      ? "bg-sky-100 text-sky-800 ring-sky-300"
-                      : "bg-slate-50 text-slate-600 ring-slate-200 hover:bg-slate-100"
-                  }`}
-                >
-                  {workflow}
-                </button>
-              ))}
+            <h2 id="trends-heading" className="mt-1 text-xl font-semibold tracking-tight">
+              Performance over time
+            </h2>
+          </div>
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.8fr)]">
+            <ChartCard
+              title="Daily reliability"
+              description="Success rate with failed-run volume."
+            >
+              {reliabilityTrend.length > 0 ? (
+                <ResponsiveContainer width="100%" height={270}>
+                  <ComposedChart
+                    data={reliabilityTrend}
+                    margin={{ top: 12, right: 4, bottom: 0, left: -18 }}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="#e8edf3"
+                      vertical={false}
+                    />
+                    <XAxis
+                      dataKey="day"
+                      tickFormatter={formatShortDate}
+                      tick={{ fontSize: 11, fill: "#94a3b8" }}
+                      axisLine={false}
+                      tickLine={false}
+                      minTickGap={26}
+                    />
+                    <YAxis
+                      yAxisId="rate"
+                      domain={[0, 100]}
+                      tickFormatter={(value) => `${value}%`}
+                      tick={{ fontSize: 11, fill: "#94a3b8" }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      yAxisId="failures"
+                      orientation="right"
+                      allowDecimals={false}
+                      tick={{ fontSize: 11, fill: "#cbd5e1" }}
+                      axisLine={false}
+                      tickLine={false}
+                      width={24}
+                    />
+                    <Tooltip content={<ReliabilityTooltip />} />
+                    <Bar
+                      yAxisId="failures"
+                      dataKey="failed"
+                      name="Failed"
+                      fill="#fecdd3"
+                      radius={[4, 4, 0, 0]}
+                      maxBarSize={18}
+                      animationDuration={chartAnimationMs}
+                    />
+                    <Line
+                      yAxisId="rate"
+                      type="monotone"
+                      dataKey="successRate"
+                      name="Success rate"
+                      stroke="#0284c7"
+                      strokeWidth={2.5}
+                      dot={false}
+                      activeDot={{ r: 4, fill: "#0284c7", strokeWidth: 0 }}
+                      animationDuration={chartAnimationMs}
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              ) : (
+                <EmptyChart />
+              )}
+            </ChartCard>
+
+            <ChartCard
+              title="Median duration"
+              description="Typical run time for the busiest workflows."
+            >
+              {workflowStats.length > 0 ? (
+                <ResponsiveContainer width="100%" height={270}>
+                  <BarChart
+                    data={[...workflowStats]
+                      .sort((a, b) => b.runs - a.runs)
+                      .slice(0, 6)}
+                    layout="vertical"
+                    margin={{ top: 12, right: 10, bottom: 0, left: 12 }}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="#e8edf3"
+                      horizontal={false}
+                    />
+                    <XAxis
+                      type="number"
+                      tickFormatter={formatDurationAxis}
+                      tick={{ fontSize: 11, fill: "#94a3b8" }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      type="category"
+                      dataKey="workflow"
+                      width={112}
+                      tick={{ fontSize: 11, fill: "#64748b" }}
+                      tickFormatter={(value) =>
+                        value.length > 17 ? `${value.slice(0, 16)}…` : value
+                      }
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip content={<DurationTooltip />} />
+                    <Bar
+                      dataKey="medianMinutes"
+                      name="Median duration"
+                      fill="#334155"
+                      radius={[0, 5, 5, 0]}
+                      animationDuration={chartAnimationMs}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <EmptyChart />
+              )}
+            </ChartCard>
+          </div>
+        </section>
+
+        <section
+          aria-labelledby="runs-heading"
+          className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm shadow-slate-950/[0.04]"
+        >
+          <div className="border-b border-slate-100 px-4 py-4 sm:px-5">
+            <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Run explorer
+                </p>
+                <h2 id="runs-heading" className="mt-1 text-xl font-semibold tracking-tight">
+                  Workflow history
+                </h2>
+              </div>
+              <label className="relative block w-full lg:max-w-sm">
+                <span className="sr-only">Search runs</span>
+                <Icon
+                  name="search"
+                  className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400"
+                />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search workflow, branch, PR or actor"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-400 focus:bg-white focus:ring-2 focus:ring-sky-100"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 flex items-center gap-1 overflow-x-auto">
+              {RUN_VIEW_OPTIONS.map((option) => {
+                const count =
+                  option.value === "all"
+                    ? scopedRuns.length
+                    : scopedRuns.filter((run) => runMatchesView(run, option.value)).length;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setRunView(option.value)}
+                    aria-pressed={runView === option.value}
+                    className={`flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                      runView === option.value
+                        ? "bg-slate-900 text-white"
+                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                    }`}
+                  >
+                    {option.label}
+                    <span
+                      className={`font-mono text-[10px] ${
+                        runView === option.value ? "text-slate-300" : "text-slate-400"
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          {showAdvancedFilters && (
+          {explorerRuns.length > 0 ? (
             <>
-              <div className="mt-3 grid gap-3 md:grid-cols-4">
-                <label className="space-y-1 text-xs text-slate-600">
-                  Workflow (Action)
-                  <select
-                    value={effectiveWorkflowFilter}
-                    onChange={(event) => setWorkflowFilter(event.target.value)}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                  >
-                    <option value="all">All workflows</option>
-                    {workflowOptions.map((workflow) => (
-                      <option key={workflow} value={workflow}>
-                        {workflow}
-                      </option>
+              <div className="hidden overflow-x-auto md:block">
+                <table className="w-full border-collapse text-left">
+                  <thead>
+                    <tr className="border-b border-slate-100 bg-slate-50/70 text-[10px] font-semibold uppercase tracking-[0.13em] text-slate-400">
+                      <th className="px-5 py-2.5">Run</th>
+                      <th className="px-4 py-2.5">Status</th>
+                      <th className="px-4 py-2.5">Branch</th>
+                      <th className="hidden px-4 py-2.5 lg:table-cell">Actor</th>
+                      <th className="px-4 py-2.5">Duration</th>
+                      <th className="px-4 py-2.5">Updated</th>
+                      <th className="w-10 px-4 py-2.5">
+                        <span className="sr-only">Open</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {explorerRuns.slice(0, visibleRunCount).map((run) => (
+                      <RunTableRow
+                        key={run.id}
+                        run={run}
+                        onSelectPr={(prNumber) => setPrFilter(String(prNumber))}
+                      />
                     ))}
-                  </select>
-                </label>
+                  </tbody>
+                </table>
+              </div>
 
-                <label className="space-y-1 text-xs text-slate-600">
-                  Branch
-                  <select
-                    value={effectiveBranchFilter}
-                    onChange={(event) => setBranchFilter(event.target.value)}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                  >
-                    <option value="all">All branches</option>
-                    {branchOptions.map((branch) => (
-                      <option key={branch} value={branch}>
-                        {branch}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+              <div className="divide-y divide-slate-100 md:hidden">
+                {explorerRuns.slice(0, visibleRunCount).map((run) => (
+                  <RunMobileRow
+                    key={run.id}
+                    run={run}
+                    onSelectPr={(prNumber) => setPrFilter(String(prNumber))}
+                  />
+                ))}
+              </div>
 
-                <label className="space-y-1 text-xs text-slate-600">
-                  Actor
-                  <select
-                    value={effectiveActorFilter}
-                    onChange={(event) => setActorFilter(event.target.value)}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+              <div className="flex flex-col items-center justify-between gap-3 border-t border-slate-100 bg-slate-50/60 px-4 py-3 sm:flex-row sm:px-5">
+                <p className="text-xs text-slate-500">
+                  Showing {Math.min(visibleRunCount, explorerRuns.length)} of{" "}
+                  {explorerRuns.length} runs
+                </p>
+                {visibleRunCount < explorerRuns.length && (
+                  <button
+                    type="button"
+                    onClick={() => setVisibleRunCount((count) => count + 25)}
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
                   >
-                    <option value="all">All actors</option>
-                    {actorOptions.map((actor) => (
-                      <option key={actor} value={actor}>
-                        {actor}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="space-y-1 text-xs text-slate-600">
-                  PR
-                  <select
-                    value={effectivePrFilter}
-                    onChange={(event) => setPrFilter(event.target.value)}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                  >
-                    <option value="all">All PRs</option>
-                    {prOptions.map((prNumber) => (
-                      <option key={prNumber} value={String(prNumber)}>
-                        PR #{prNumber}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    Load 25 more
+                    <Icon name="chevron" className="size-3.5" />
+                  </button>
+                )}
               </div>
             </>
+          ) : (
+            <div className="grid min-h-64 place-items-center px-6 py-10 text-center">
+              <div>
+                <div className="mx-auto grid size-11 place-items-center rounded-full bg-slate-100 text-slate-500">
+                  <Icon name="search" className="size-5" />
+                </div>
+                <p className="mt-3 text-sm font-semibold text-slate-900">No matching runs</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Try a different status, search term, period, or filter.
+                </p>
+                {(query || hasActiveFilters || runView !== "all") && (
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className="mt-3 text-xs font-semibold text-sky-700 hover:text-sky-800"
+                  >
+                    Clear all filters
+                  </button>
+                )}
+              </div>
+            </div>
           )}
         </section>
 
-        {loading && (
-          <section className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
-            Loading live run data...
-          </section>
-        )}
-
-        {!loading && !hasRunsInPeriod && (
-          <section className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
-            No actions ran in the selected reporting period.
-          </section>
-        )}
-
-        {!loading && hasRunsInPeriod && !hasVisibleRuns && (
-          <section className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
-            No runs match the current branch/workflow/PR/search filters in this period.
-          </section>
-        )}
-
-        {!loading && hasVisibleRuns && (
-          <>
-            <section className="grid gap-4 md:grid-cols-3">
-              <MetricCard label="Failures" value={summary.failed} />
-              <MetricCard label="Success Rate" value={`${summary.successRate}%`} />
-              <MetricCard label="Total Time (Est.)" value={formatMinutes(summary.totalDurationMs)} />
-            </section>
-            <p className="text-sm text-slate-600">
-              {summary.total} visible runs in this view.
-            </p>
-            <p className="text-xs text-slate-500">
-              `Total Time (Est.)` uses workflow run durations. GitHub Usage Metrics reports billed job-minutes, so values will differ.
-            </p>
-
-            <section>
-              <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">Analytics</h2>
-            </section>
-
-            <section className="grid gap-4 lg:grid-cols-3">
-              <ChartCard title="Total Time by Workflow" className="lg:col-span-2">
-                <ResponsiveContainer width="100%" height={220}>
-                  <BarChart data={totalDurationByWorkflow} layout="vertical" margin={{ left: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-                    <XAxis
-                      type="number"
-                      tick={{ fontSize: 11, fill: "#94a3b8" }}
-                      tickFormatter={(v) => formatMinutesValue(Math.round(v))}
-                      axisLine={{ stroke: "#e2e8f0" }}
-                      tickLine={false}
-                    />
-                    <YAxis
-                      type="category"
-                      dataKey="workflow"
-                      width={200}
-                      tick={{ fontSize: 11, fill: "#64748b", style: { whiteSpace: "nowrap" } }}
-                      axisLine={false}
-                      tickLine={false}
-                    />
-                    <Tooltip
-                      content={
-                        <ChartTooltipContent
-                          valueFormatter={(value, name) =>
-                            name === "runs"
-                              ? `${value} run${value !== 1 ? "s" : ""}`
-                              : formatMinutesValue(Math.round(value))
-                          }
-                        />
-                      }
-                    />
-                    <Bar
-                      dataKey="totalMinutes"
-                      name="Total Time"
-                      fill="#0284c7"
-                      radius={[0, 4, 4, 0]}
-                      animationDuration={chartAnimationMs}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </ChartCard>
-
-              <ChartCard title="Outcome Split">
-                <ResponsiveContainer width="100%" height={220}>
-                  <PieChart>
-                    <Tooltip
-                      content={
-                        <ChartTooltipContent
-                          valueFormatter={(value, name) =>
-                            `${value} run${value !== 1 ? "s" : ""} (${name === "Success" ? summary.successRate : 100 - summary.successRate}%)`
-                          }
-                        />
-                      }
-                    />
-                    <Pie
-                      data={pieData}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={55}
-                      outerRadius={80}
-                      paddingAngle={2}
-                      strokeWidth={0}
-                      animationDuration={chartAnimationMs}
-                    >
-                      {pieData.map((entry) => (
-                        <Cell key={entry.name} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <text
-                      x="50%"
-                      y="46%"
-                      textAnchor="middle"
-                      dominantBaseline="central"
-                      className="fill-slate-900 text-2xl font-semibold"
-                    >
-                      {summary.successRate}%
-                    </text>
-                    <text
-                      x="50%"
-                      y="60%"
-                      textAnchor="middle"
-                      dominantBaseline="central"
-                      className="fill-slate-400 text-[11px]"
-                    >
-                      success rate
-                    </text>
-                  </PieChart>
-                </ResponsiveContainer>
-              </ChartCard>
-            </section>
-
-            <section>
-              <ChartCard title="Actions Time by Day (Estimated)">
-                <ResponsiveContainer width="100%" height={220}>
-                  <BarChart data={minutesByDayData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                    <XAxis
-                      dataKey="day"
-                      tick={{ fontSize: 11, fill: "#94a3b8" }}
-                      tickFormatter={formatShortDate}
-                      axisLine={{ stroke: "#e2e8f0" }}
-                      tickLine={false}
-                    />
-                    <YAxis
-                      tick={{ fontSize: 11, fill: "#94a3b8" }}
-                      tickFormatter={(v) => formatMinutesValue(Math.round(v))}
-                      axisLine={false}
-                      tickLine={false}
-                    />
-                    <Tooltip
-                      content={
-                        <ChartTooltipContent
-                          labelFormatter={(label) => formatShortDate(String(label))}
-                          valueFormatter={(value) => formatMinutesValue(Math.round(value))}
-                        />
-                      }
-                    />
-                    <Bar
-                      dataKey="minutes"
-                      name="Time"
-                      fill="#0ea5e9"
-                      radius={[4, 4, 0, 0]}
-                      animationDuration={chartAnimationMs}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </ChartCard>
-            </section>
-
-            <section className="grid gap-4 lg:grid-cols-2">
-              <ChartCard title="Pass / Fail by Workflow Type">
-                <ResponsiveContainer width="100%" height={240}>
-                  <BarChart data={failureByWorkflowTypeData} layout="vertical" margin={{ left: 30 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-                    <XAxis
-                      type="number"
-                      tick={{ fontSize: 11, fill: "#94a3b8" }}
-                      axisLine={{ stroke: "#e2e8f0" }}
-                      tickLine={false}
-                    />
-                    <YAxis
-                      type="category"
-                      dataKey="workflow"
-                      width={160}
-                      tick={{ fontSize: 11, fill: "#64748b" }}
-                      axisLine={false}
-                      tickLine={false}
-                    />
-                    <Tooltip
-                      content={
-                        <ChartTooltipContent
-                          valueFormatter={(value) => `${value} run${value !== 1 ? "s" : ""}`}
-                        />
-                      }
-                    />
-                    <Legend
-                      iconSize={8}
-                      iconType="circle"
-                      wrapperStyle={{ fontSize: 12, color: "#64748b", paddingTop: 4 }}
-                    />
-                    <Bar
-                      dataKey="success"
-                      name="Success"
-                      stackId="a"
-                      fill="#10b981"
-                      shape={(props: any) => RoundedHStackBar(props, "left", "failed")}
-                      animationDuration={chartAnimationMs}
-                    />
-                    <Bar
-                      dataKey="failed"
-                      name="Failed"
-                      stackId="a"
-                      fill="#f43f5e"
-                      shape={(props: any) => RoundedHStackBar(props, "right", "failed")}
-                      animationDuration={chartAnimationMs}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </ChartCard>
-
-              <ChartCard
-                title={
-                  workflowFilter === "all"
-                    ? "Pass / Fail by Date"
-                    : `Pass / Fail by Date (${workflowFilter})`
-                }
-              >
-                <ResponsiveContainer width="100%" height={240}>
-                  <BarChart data={passFailByDateData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                    <XAxis
-                      dataKey="day"
-                      tick={{ fontSize: 11, fill: "#94a3b8" }}
-                      tickFormatter={formatShortDate}
-                      axisLine={{ stroke: "#e2e8f0" }}
-                      tickLine={false}
-                    />
-                    <YAxis
-                      tick={{ fontSize: 11, fill: "#94a3b8" }}
-                      axisLine={false}
-                      tickLine={false}
-                      allowDecimals={false}
-                    />
-                    <Tooltip
-                      content={
-                        <ChartTooltipContent
-                          labelFormatter={(label) => formatShortDate(String(label))}
-                          valueFormatter={(value) => `${value} run${value !== 1 ? "s" : ""}`}
-                        />
-                      }
-                    />
-                    <Legend
-                      iconSize={8}
-                      iconType="circle"
-                      wrapperStyle={{ fontSize: 12, color: "#64748b", paddingTop: 4 }}
-                    />
-                    <Bar
-                      dataKey="success"
-                      name="Success"
-                      stackId="a"
-                      fill="#10b981"
-                      shape={(props: any) => RoundedStackBar(props, "bottom", "failed")}
-                      animationDuration={chartAnimationMs}
-                    />
-                    <Bar
-                      dataKey="failed"
-                      name="Failed"
-                      stackId="a"
-                      fill="#f43f5e"
-                      shape={(props: any) => RoundedStackBar(props, "top", "failed")}
-                      animationDuration={chartAnimationMs}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </ChartCard>
-            </section>
-
-            {recentFailedRuns.length > 0 && (
-              <section className="rounded-2xl border border-rose-200 bg-rose-50/70 p-4 shadow-sm">
-                <div className="mb-2 flex items-center justify-between">
-                  <h2 className="text-sm font-semibold text-rose-900">Recent Failures <span className="font-normal text-rose-700">(last 48h)</span></h2>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-rose-700">{visibleRecentFailedRuns.length} shown</span>
-                    {recentFailedRuns.length > 3 && (
-                      <button
-                        type="button"
-                        onClick={() => setShowAllFailures((current) => !current)}
-                        className="rounded-md border border-rose-200 bg-white px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50"
-                      >
-                        {showAllFailures ? "Show less" : `View all (${recentFailedRuns.length})`}
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  {visibleRecentFailedRuns.map((run) => (
-                    <a
-                      key={`failure-${run.id}`}
-                      href={run.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block rounded-md border border-rose-100 bg-white px-3 py-2 text-sm hover:border-rose-300"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="truncate font-medium text-slate-900">
-                          {run.workflowName} #{run.runNumber}
-                          <span className="ml-2 text-xs font-normal text-slate-500">
-                            {run.prNumbers.length > 0
-                              ? `· PR #${run.prNumbers[0]} by ${run.actor}`
-                              : `· by ${run.actor}`}
-                          </span>
-                        </p>
-                        <span className="text-xs text-slate-500">{formatTime(run.updatedAt)}</span>
-                      </div>
-                      <p className="mt-1 text-xs font-medium text-rose-900">
-                        What failed: {extractFailureHeadline(run.failureSummary) ?? run.name}
-                      </p>
-                      {getDisplayFailurePoints(run).length > 0 && (
-                        <ul className="mt-1 space-y-0.5 text-xs text-slate-600">
-                          {getDisplayFailurePoints(run)
-                            .slice(0, 2)
-                            .map((point) => (
-                              <li key={`quick-${run.id}-${point}`} className="break-words">
-                                {point}
-                              </li>
-                            ))}
-                        </ul>
-                      )}
-                    </a>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            <section className="rounded-2xl border border-white/70 bg-white/85 p-4 shadow-lg shadow-slate-900/5 backdrop-blur">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-lg font-semibold">Run History (Filtered)</h2>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-slate-500">
-                    {Math.min(visibleRunCount, filteredRuns.length)} of {filteredRuns.length} run(s)
-                  </span>
-                  {loading && <span className="text-xs text-slate-500">Loading...</span>}
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                {filteredRuns.slice(0, visibleRunCount).map((run) => {
-                  const displayFailurePoints = getDisplayFailurePoints(run);
-                  return (
-                    <article key={run.id} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <a
-                            href={run.url}
-                            className="text-sm font-semibold text-slate-900 hover:text-sky-700"
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            {run.workflowName} #{run.runNumber}
-                          </a>
-                          <p className="text-sm text-slate-600">{run.name}</p>
-                          <p className="mt-1 text-xs text-slate-500">
-                            {run.branch} • {run.event} • {run.actor} • {formatTime(run.updatedAt)}
-                          </p>
-                          {run.prNumbers.length > 0 && (
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              {run.prNumbers.map((prNumber) => (
-                                <button
-                                  key={`${run.id}-${prNumber}`}
-                                  type="button"
-                                  onClick={() => setPrFilter(String(prNumber))}
-                                  className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700 ring-1 ring-sky-200"
-                                >
-                                  PR #{prNumber}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className={`rounded-full px-2 py-1 text-xs font-medium ring-1 ${statusTone(run)}`}>
-                            {run.status === "completed" ? run.conclusion || "unknown" : run.status}
-                          </span>
-                          <span className="text-xs text-slate-500">{formatDuration(run.durationMs)}</span>
-                        </div>
-                      </div>
-
-                      {run.failureSummary && (
-                        <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-3">
-                          <p className="text-sm font-medium text-rose-800">Failure summary</p>
-                          <p className="mt-1 text-sm text-rose-900">{run.failureSummary}</p>
-                          {displayFailurePoints.length > 0 && (
-                            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-rose-900">
-                              {displayFailurePoints.map((point) => (
-                                <li key={point}>{point}</li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                      )}
-                    </article>
-                  );
-                })}
-                {visibleRunCount < filteredRuns.length && (
-                  <div ref={loadMoreRef} className="flex justify-center py-4">
-                    <span className="text-xs text-slate-400">Loading more runs...</span>
-                  </div>
-                )}
-              </div>
-            </section>
-          </>
-        )}
+        <footer className="flex flex-col justify-between gap-2 border-t border-slate-200 py-2 text-xs text-slate-400 sm:flex-row">
+          <span>Data served from the Convex run cache with live updates.</span>
+          <span>
+            Duration reflects workflow elapsed time, not GitHub billed job-minutes.
+          </span>
+        </footer>
       </div>
     </main>
   );
 }
 
-function MetricCard({ label, value }: { label: string; value: string | number }) {
+function LoadingDashboard() {
   return (
-    <div className="rounded-2xl border border-white/60 bg-white/90 p-4 shadow-lg shadow-slate-900/5 backdrop-blur">
-      <p className="text-xs uppercase tracking-[0.16em] text-slate-500">{label}</p>
-      <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">{value}</p>
+    <main className="min-h-screen bg-[#f4f6f9] text-slate-950">
+      <header className="h-16 bg-[#0b1220]" />
+      <div className="h-14 border-b border-slate-200 bg-white" />
+      <div className="mx-auto max-w-[1480px] space-y-5 px-4 py-7 sm:px-6 lg:px-8">
+        <div className="h-8 w-72 animate-pulse rounded-lg bg-slate-200" />
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {[0, 1, 2, 3].map((item) => (
+            <div
+              key={item}
+              className="h-32 animate-pulse rounded-2xl border border-slate-200 bg-white"
+            />
+          ))}
+        </div>
+        <div className="grid gap-4 xl:grid-cols-[1.65fr_0.85fr]">
+          <div className="h-96 animate-pulse rounded-2xl border border-slate-200 bg-white" />
+          <div className="h-96 animate-pulse rounded-2xl border border-slate-200 bg-white" />
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function MetricCard({
+  icon,
+  label,
+  value,
+  detail,
+  tone,
+}: {
+  icon: IconName;
+  label: string;
+  value: string | number;
+  detail: string;
+  tone: "positive" | "negative" | "warning" | "info" | "neutral";
+}) {
+  const tones = {
+    positive: "bg-emerald-50 text-emerald-700",
+    negative: "bg-rose-50 text-rose-700",
+    warning: "bg-amber-50 text-amber-700",
+    info: "bg-sky-50 text-sky-700",
+    neutral: "bg-slate-100 text-slate-600",
+  };
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm shadow-slate-950/[0.04] sm:p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.13em] text-slate-400">
+            {label}
+          </p>
+          <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">{value}</p>
+        </div>
+        <div className={`grid size-9 place-items-center rounded-xl ${tones[tone]}`}>
+          <Icon name={icon} className="size-4.5" />
+        </div>
+      </div>
+      <p
+        className={`mt-3 text-xs ${
+          tone === "negative"
+            ? "font-medium text-rose-600"
+            : tone === "positive"
+              ? "font-medium text-emerald-600"
+              : "text-slate-500"
+        }`}
+      >
+        {detail}
+      </p>
+    </div>
+  );
+}
+
+function SectionHeader({
+  eyebrow,
+  title,
+  description,
+  icon,
+  action,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
+  icon: IconName;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-4 py-4 sm:px-5">
+      <div className="flex min-w-0 gap-3">
+        <div className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-600">
+          <Icon name={icon} className="size-4" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+            {eyebrow}
+          </p>
+          <h2 className="mt-0.5 text-base font-semibold text-slate-950">{title}</h2>
+          <p className="mt-0.5 text-xs text-slate-500">{description}</p>
+        </div>
+      </div>
+      {action}
     </div>
   );
 }
 
 function ChartCard({
   title,
-  className,
+  description,
   children,
 }: {
   title: string;
-  className?: string;
+  description: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className={`rounded-2xl border border-white/70 bg-white/90 p-4 shadow-lg shadow-slate-900/5 ${className ?? ""}`}>
-      <h2 className="mb-2 text-sm font-semibold text-slate-700">{title}</h2>
-      {children}
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm shadow-slate-950/[0.04]">
+      <div className="border-b border-slate-100 px-4 py-4 sm:px-5">
+        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+        <p className="mt-0.5 text-xs text-slate-500">{description}</p>
+      </div>
+      <div className="px-2 pb-3 pt-1 sm:px-4">{children}</div>
     </div>
   );
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-function RoundedStackBar(props: any, position: "bottom" | "top", failedKey: string) {
-  const { x, y, width, height, fill, payload } = props;
-  if (!width || !height || height <= 0) return null;
-  const hasFailed = (payload?.[failedKey] ?? 0) > 0;
-  const r = 4;
-  if (position === "bottom" && hasFailed) {
-    return <rect x={x} y={y} width={width} height={height} fill={fill} />;
-  }
-  if (position === "bottom") {
-    // success-only: round the top-right corners (horizontal) or top corners (vertical)
-    return (
-      <path
-        d={`M${x},${y + height} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + width - r},${y} Q${x + width},${y} ${x + width},${y + r} L${x + width},${y + height} Z`}
-        fill={fill}
-      />
-    );
-  }
-  // top bar (failed): always rounded on top
+function EmptyChart() {
   return (
-    <path
-      d={`M${x},${y + height} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + width - r},${y} Q${x + width},${y} ${x + width},${y + r} L${x + width},${y + height} Z`}
-      fill={fill}
-    />
+    <div className="grid h-[270px] place-items-center text-sm text-slate-400">
+      No completed runs to chart.
+    </div>
   );
 }
 
-function RoundedHStackBar(props: any, position: "left" | "right", failedKey: string) {
-  const { x, y, width, height, fill, payload } = props;
-  if (!width || !height || height <= 0) return null;
-  const hasFailed = (payload?.[failedKey] ?? 0) > 0;
-  const r = 4;
-  if (position === "left" && hasFailed) {
-    return <rect x={x} y={y} width={width} height={height} fill={fill} />;
-  }
-  if (position === "left") {
-    // success-only: round the right end
-    return (
-      <path
-        d={`M${x},${y} L${x + width - r},${y} Q${x + width},${y} ${x + width},${y + r} L${x + width},${y + height - r} Q${x + width},${y + height} ${x + width - r},${y + height} L${x},${y + height} Z`}
-        fill={fill}
-      />
-    );
-  }
-  // right bar (failed): always rounded on right
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+  allLabel,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: string[];
+  allLabel: string;
+}) {
   return (
-    <path
-      d={`M${x},${y} L${x + width - r},${y} Q${x + width},${y} ${x + width},${y + r} L${x + width},${y + height - r} Q${x + width},${y + height} ${x + width - r},${y + height} L${x},${y + height} Z`}
-      fill={fill}
-    />
+    <label className="space-y-1 text-xs font-medium text-slate-500">
+      {label}
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+      >
+        <option value="all">{allLabel}</option>
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
-function ChartTooltipContent({
+function RunTableRow({
+  run,
+  onSelectPr,
+}: {
+  run: ActionsRun;
+  onSelectPr: (prNumber: number) => void;
+}) {
+  return (
+    <tr className="group transition hover:bg-slate-50/80">
+      <td className="max-w-md px-5 py-3">
+        <a
+          href={run.url}
+          target="_blank"
+          rel="noreferrer"
+          className="block min-w-0"
+        >
+          <div className="flex items-center gap-2">
+            <span className={`size-2 shrink-0 rounded-full ${statusDotTone(run)}`} />
+            <span className="truncate text-sm font-semibold text-slate-900 group-hover:text-sky-700">
+              {run.workflowName}
+            </span>
+            <span className="shrink-0 font-mono text-[11px] text-slate-400">
+              #{run.runNumber}
+            </span>
+          </div>
+          <p
+            className={`mt-0.5 truncate pl-4 text-xs ${
+              isFailedRun(run) && run.failureSummary ? "text-rose-600" : "text-slate-500"
+            }`}
+          >
+            {isFailedRun(run) && run.failureSummary
+              ? extractFailureHeadline(run.failureSummary, run.name)
+              : run.name}
+          </p>
+        </a>
+      </td>
+      <td className="px-4 py-3">
+        <span
+          className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-semibold ${statusTone(run)}`}
+        >
+          {statusLabel(run)}
+        </span>
+      </td>
+      <td className="max-w-40 px-4 py-3">
+        <div className="flex items-center gap-1.5 text-xs text-slate-600">
+          <Icon name="branch" className="size-3.5 shrink-0 text-slate-400" />
+          <span className="truncate">{run.branch}</span>
+        </div>
+        {run.prNumbers[0] && (
+          <button
+            type="button"
+            onClick={() => onSelectPr(run.prNumbers[0])}
+            className="mt-1 text-[10px] font-semibold text-sky-700 hover:text-sky-800"
+          >
+            PR #{run.prNumbers[0]}
+          </button>
+        )}
+      </td>
+      <td className="hidden max-w-36 truncate px-4 py-3 text-xs text-slate-500 lg:table-cell">
+        {run.actor}
+      </td>
+      <td className="whitespace-nowrap px-4 py-3 font-mono text-[11px] text-slate-500">
+        {formatDuration(run.durationMs)}
+      </td>
+      <td
+        className="whitespace-nowrap px-4 py-3 text-xs text-slate-500"
+        title={formatTime(run.updatedAt)}
+      >
+        {formatRelativeTime(run.updatedAt)}
+      </td>
+      <td className="px-4 py-3">
+        <a
+          href={run.url}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Open ${run.workflowName} run ${run.runNumber}`}
+          className="grid size-7 place-items-center rounded-lg text-slate-300 transition group-hover:bg-white group-hover:text-sky-700 group-hover:shadow-sm"
+        >
+          <Icon name="arrow-up-right" className="size-3.5" />
+        </a>
+      </td>
+    </tr>
+  );
+}
+
+function RunMobileRow({
+  run,
+  onSelectPr,
+}: {
+  run: ActionsRun;
+  onSelectPr: (prNumber: number) => void;
+}) {
+  return (
+    <article className="px-4 py-4">
+      <div className="flex items-start justify-between gap-3">
+        <a href={run.url} target="_blank" rel="noreferrer" className="min-w-0">
+          <p className="truncate text-sm font-semibold text-slate-900">
+            {run.workflowName}
+            <span className="ml-1.5 font-mono text-[11px] font-medium text-slate-400">
+              #{run.runNumber}
+            </span>
+          </p>
+          <p
+            className={`mt-1 line-clamp-2 text-xs leading-5 ${
+              isFailedRun(run) && run.failureSummary ? "text-rose-600" : "text-slate-500"
+            }`}
+          >
+            {isFailedRun(run) && run.failureSummary
+              ? extractFailureHeadline(run.failureSummary, run.name)
+              : run.name}
+          </p>
+        </a>
+        <span
+          className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold ${statusTone(run)}`}
+        >
+          {statusLabel(run)}
+        </span>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+        <span className="flex min-w-0 items-center gap-1">
+          <Icon name="branch" className="size-3.5 shrink-0" />
+          <span className="max-w-40 truncate">{run.branch}</span>
+        </span>
+        <span>{run.actor}</span>
+        <span>{formatDuration(run.durationMs)}</span>
+        <span>{formatRelativeTime(run.updatedAt)}</span>
+        {run.prNumbers[0] && (
+          <button
+            type="button"
+            onClick={() => onSelectPr(run.prNumbers[0])}
+            className="font-semibold text-sky-700"
+          >
+            PR #{run.prNumbers[0]}
+          </button>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function ReliabilityTooltip({
   active,
   payload,
   label,
-  labelFormatter,
-  valueFormatter,
 }: {
   active?: boolean;
-  payload?: any[];
-  label?: string | number;
-  labelFormatter?: (label: string | number, rows: Record<string, any>[]) => string;
-  valueFormatter?: (value: number, name: string) => string;
+  payload?: Array<{ dataKey?: string; value?: number }>;
+  label?: string;
 }) {
   if (!active || !payload?.length) return null;
-
-  const rows = payload.map((p: any) => p.payload ?? {});
-  const displayLabel = labelFormatter
-    ? labelFormatter(label ?? "", rows)
-    : String(label ?? "");
-
+  const successRate = payload.find((item) => item.dataKey === "successRate")?.value ?? 0;
+  const failed = payload.find((item) => item.dataKey === "failed")?.value ?? 0;
   return (
-    <div className="rounded-lg border border-slate-200 bg-white/95 px-3.5 py-2.5 shadow-xl shadow-slate-900/10 backdrop-blur">
-      {displayLabel && (
-        <p className="mb-1.5 border-b border-slate-100 pb-1.5 text-[11px] font-medium text-slate-500">
-          {displayLabel}
-        </p>
-      )}
-      <div className="space-y-0.5">
-        {payload.map((entry: any) => (
-          <div key={entry.dataKey ?? entry.name} className="flex items-center justify-between gap-6 text-[13px]">
-            <div className="flex items-center gap-1.5">
-              <span
-                className="inline-block h-2 w-2 rounded-sm"
-                style={{ backgroundColor: entry.color }}
-              />
-              <span className="capitalize text-slate-500">{entry.name}</span>
-            </div>
-            <span className="font-semibold tabular-nums text-slate-900">
-              {valueFormatter ? valueFormatter(Number(entry.value), entry.name) : entry.value}
-            </span>
-          </div>
-        ))}
-      </div>
+    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs shadow-xl shadow-slate-950/10">
+      <p className="font-semibold text-slate-900">{formatShortDate(String(label))}</p>
+      <p className="mt-1 text-sky-700">{successRate}% success</p>
+      <p className="text-rose-600">
+        {failed} failed run{failed === 1 ? "" : "s"}
+      </p>
     </div>
   );
 }
-/* eslint-enable @typescript-eslint/no-explicit-any */
+
+function DurationTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  payload?: Array<{ value?: number }>;
+  label?: string;
+}) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="max-w-64 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs shadow-xl shadow-slate-950/10">
+      <p className="truncate font-semibold text-slate-900">{label}</p>
+      <p className="mt-1 text-slate-600">
+        Median {formatDuration((payload[0]?.value ?? 0) * 60_000)}
+      </p>
+    </div>
+  );
+}
+
+function Icon({ name, className = "size-4" }: { name: IconName; className?: string }) {
+  const paths: Record<IconName, React.ReactNode> = {
+    activity: (
+      <path d="M4 12h3l2-7 4 14 2-7h5" />
+    ),
+    "arrow-up-right": (
+      <>
+        <path d="M7 17 17 7" />
+        <path d="M7 7h10v10" />
+      </>
+    ),
+    branch: (
+      <>
+        <circle cx="6" cy="5" r="2" />
+        <circle cx="18" cy="6" r="2" />
+        <circle cx="6" cy="19" r="2" />
+        <path d="M6 7v10M8 8c4 0 3-2 8-2" />
+      </>
+    ),
+    check: <path d="m5 12 4 4L19 6" />,
+    chevron: <path d="m9 18 6-6-6-6" />,
+    clock: (
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7v5l3 2" />
+      </>
+    ),
+    filter: <path d="M4 6h16M7 12h10M10 18h4" />,
+    pulse: (
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M7 12h2l1.5-4 3 8 1.5-4h2" />
+      </>
+    ),
+    search: (
+      <>
+        <circle cx="11" cy="11" r="7" />
+        <path d="m20 20-4-4" />
+      </>
+    ),
+    warning: (
+      <>
+        <path d="M10.3 4.2 2.7 18a2 2 0 0 0 1.8 3h15a2 2 0 0 0 1.8-3L13.7 4.2a2 2 0 0 0-3.4 0Z" />
+        <path d="M12 9v4M12 17h.01" />
+      </>
+    ),
+    workflow: (
+      <>
+        <rect x="3" y="4" width="6" height="6" rx="2" />
+        <rect x="15" y="14" width="6" height="6" rx="2" />
+        <path d="M9 7h3a4 4 0 0 1 4 4v3M6 10v4a3 3 0 0 0 3 3h6" />
+      </>
+    ),
+    x: <path d="m7 7 10 10M17 7 7 17" />,
+  };
+
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      {paths[name]}
+    </svg>
+  );
+}

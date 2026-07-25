@@ -18,7 +18,7 @@ export default async function Home() {
 
   let initialData: ActionsHistoryResponse | null = null;
   try {
-    initialData = await getCachedHistory(undefined, 900);
+    initialData = await getCachedHistory(undefined, 500);
   } catch {
     initialData = null;
   }
